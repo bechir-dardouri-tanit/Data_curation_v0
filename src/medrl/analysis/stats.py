@@ -336,6 +336,11 @@ def promotion_gate(
                     f"{name}: guardrail violation, regressed {-delta_points:.2f}pt "
                     f"(allowed {guardrail_max_regression_points:.2f}pt)"
                 )
+            else:
+                reasons.append(
+                    f"{name}: guardrail held ({delta_points:+.2f}pt, "
+                    f"allowed regression {guardrail_max_regression_points:.2f}pt)"
+                )
             continue
 
         mde_points = max(ch.mde_points, ba.mde_points)

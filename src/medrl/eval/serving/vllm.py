@@ -73,11 +73,12 @@ class ServePhase(BaseModel):
             argv.append("--language-model-only")
         if self.reasoning_parser:
             argv.extend(["--reasoning-parser", self.reasoning_parser])
-        if len(self.gpu_ids) == 1:
-            argv.extend(["--cuda-device-suffix", str(self.gpu_ids[0])])
         return argv
 
     def env(self) -> dict[str, str]:
+        """GPU placement for the subprocess. This is the *only* placement mechanism:
+        ``command()`` deliberately emits no device-selection flag, so a runner applying
+        both could not double-restrict an already-visible set."""
         return {"CUDA_VISIBLE_DEVICES": ",".join(map(str, self.gpu_ids))}
 
 

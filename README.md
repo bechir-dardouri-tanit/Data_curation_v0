@@ -37,11 +37,16 @@ Code lives on `/`; **all weights, datasets and artifacts live on `/scratch`** (`
 
 ```bash
 uv venv --python 3.12 && uv pip install -e ".[dev]"
-just test          # CPU-only unit tests
-just probe         # assert Qwen3.5-9B architecture invariants against the Hub
-just convert       # emit the text-only checkpoint + logit-equivalence check   (GPU)
-just eval          # run the decision-grade benchmark set                      (GPU)
+just ci             # ruff + mypy --strict + CPU-only unit tests
+just tasks          # list the benchmark registry (grade, judge, verify style)
+just plan           # validate a preset and print its GPU deployment plan
+just probe          # assert Qwen3.5-9B architecture invariants against the Hub  (network)
+just convert        # emit the text-only checkpoint + logit-equivalence check    (GPU, [train])
 ```
+
+**Status — Phase 0 (skeleton).** Everything above runs on a CPU-only box. The eval *runtime*
+(`medrl eval run`: vLLM generation → grading → scoring) is wired next on a GPU host; until then
+`medrl eval plan -c <preset> --dry-run` is the full-fidelity CPU view of what a run will do.
 
 ## Target model
 
