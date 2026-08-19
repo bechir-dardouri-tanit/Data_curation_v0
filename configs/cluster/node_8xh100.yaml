@@ -1,0 +1,9 @@
+name: node_8xh100
+num_gpus: 8
+gpu_memory_gb: 80
+train_strategy: fsdp2
+rollout_placement: colocate
+tensor_parallel: 4
+gpu_memory_utilization: 0.85
+max_model_len: 40960
+global_batch_tokens: 524288

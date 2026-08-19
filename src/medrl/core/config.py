@@ -15,7 +15,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from medrl.core.hashing import hash_obj
 
@@ -161,6 +161,20 @@ class SamplingConfig(Frozen):
         return self
 
 
+def _yaml_bool_to_mode(value: object) -> object:
+    """YAML 1.1 spells ``on``/``off`` as booleans; accept both spellings.
+
+    Without this, ``thinking: {mode: on}`` silently arrives as ``True`` and validation
+    fails with a confusing message. Every enum used in YAML gets the same hazard, so it
+    is fixed at the field, not at each author.
+    """
+    if value is True:
+        return "on"
+    if value is False:
+        return "off"
+    return value
+
+
 class ThinkingMode(StrEnum):
     ON = "on"
     OFF = "off"
@@ -173,7 +187,7 @@ class ThinkingConfig(Frozen):
     cannot masquerade as accuracy differences.
     """
 
-    mode: ThinkingMode = ThinkingMode.ON
+    mode: Annotated[ThinkingMode, BeforeValidator(_yaml_bool_to_mode)] = ThinkingMode.ON
     think_budget: Annotated[int, Field(ge=0)] = 8192
     answer_budget: Annotated[int, Field(ge=1)] = 2048
     # Qwen only voluntarily emits the opening <think> tag a minority of the time; prefill it.

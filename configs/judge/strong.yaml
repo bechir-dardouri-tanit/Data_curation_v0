@@ -1,0 +1,9 @@
+# Strong tier for reported HealthBench numbers; calibrated on a physician-labeled subsample.
+tier: strong
+backend: vllm
+n_consistency: 3
+position_swap: true
+temperature: 0.4
+model:
+  hf_id: Qwen/Qwen3.5-27B
+  text_only: true

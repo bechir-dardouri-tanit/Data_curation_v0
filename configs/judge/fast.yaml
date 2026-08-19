@@ -1,0 +1,10 @@
+# Fast tier: ranking only. A weak grader systematically inflates HealthBench-Hard;
+# reported numbers must come from the strong tier.
+tier: fast
+backend: vllm
+n_consistency: 1
+position_swap: true
+temperature: 0.0
+model:
+  hf_id: Qwen/Qwen3.5-4B
+  text_only: true

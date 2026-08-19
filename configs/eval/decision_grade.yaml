@@ -1,0 +1,21 @@
+# Decision-grade subset: only benchmarks whose MDE can resolve real effects, plus the
+# guardrails that block promotion. Judge-requiring benchmarks need judge config (merged
+# from configs/judge/).
+model:
+  hf_id: Qwen/Qwen3.5-9B
+  text_only: true
+cluster: local_2xh100
+sampling:
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 40
+  n_repeats: 8
+  seed: 0
+  max_tokens: 10240
+thinking:
+  mode: "on"
+  think_budget: 8192
+  answer_budget: 2048
+serving: sequential
+judge: fast
+benchmarks: [medqa, medmcqa, mmlu_pro_health, medxpertqa_text, medcalc, ifeval, mediqal, healthbench_hard, gpqa_diamond]

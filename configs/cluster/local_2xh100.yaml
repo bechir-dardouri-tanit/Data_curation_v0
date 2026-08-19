@@ -1,0 +1,9 @@
+name: local_2xh100
+num_gpus: 2
+gpu_memory_gb: 80
+train_strategy: lora          # 9B full-FT does not fit 2x80GB; see plan
+rollout_placement: sequential # colocate needs >=4 GPUs
+tensor_parallel: 2
+gpu_memory_utilization: 0.85
+max_model_len: 40960
+global_batch_tokens: 262144

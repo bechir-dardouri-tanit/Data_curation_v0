@@ -19,11 +19,20 @@ class Registry[T]:
         self._kind = kind
         self._items: dict[str, T] = {}
 
-    def register(self, name: str, obj: T | None = None) -> Callable[[T], T] | T:
-        """Register ``obj`` under ``name``. Usable as a decorator or a direct call."""
+    def register(self, name: str | T, obj: T | None = None) -> Callable[[T], T] | T:
+        """Register ``obj`` under ``name``.
+
+        Three call shapes: ``@reg("name")`` (decorator), ``reg("name", obj)`` (explicit),
+        and ``reg(obj)`` where the object carries its own ``name`` attribute (specs,
+        configs) -- the single-argument object form exists so declarative suites like
+        ``medrl.eval.tasks.benchmarks`` read as data, not registration boilerplate.
+        """
         if obj is not None:
-            self._insert(name, obj)
+            self._insert(str(name), obj)
             return obj
+        if not isinstance(name, str):
+            self._insert(str(getattr(name, "name", type(name).__name__)), name)
+            return name
 
         def decorator(inner: T) -> T:
             self._insert(name, inner)
