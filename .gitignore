@@ -1,0 +1,24 @@
+# Artifacts live on /scratch and are never committed.
+/artifacts/
+/data_cache/
+/logs/
+/outputs/
+*.eval
+
+# Experiment results are committed (manifest + metrics json), raw samples are not.
+experiments/**/samples/
+experiments/**/*.jsonl
+
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+.env
+wandb/
