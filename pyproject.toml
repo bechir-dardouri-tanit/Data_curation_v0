@@ -98,7 +98,7 @@ disallow_untyped_defs = true
 module = [
     "torch.*", "transformers.*", "safetensors.*", "vllm.*", "verl.*",
     "inspect_ai.*", "datasets.*", "wandb.*", "datasketch.*", "duckdb.*",
-    "liger_kernel.*", "peft.*", "accelerate.*",
+    "liger_kernel.*", "peft.*", "accelerate.*", "huggingface_hub",
 ]
 ignore_missing_imports = true
 
