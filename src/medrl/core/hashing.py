@@ -22,7 +22,11 @@ def _canonical(obj: Any) -> Any:
     """Convert to a form with a deterministic JSON encoding.
 
     Mappings are key-sorted; sets become sorted lists; paths and everything exotic fall
-    back to ``str``. Floats keep full repr precision so 0.1 never collides with 0.10000001.
+    back to ``str``. Floats are tagged and keep full repr precision, so 0.1 never
+    collides with 0.10000001 -- and a float never collides with the *string* spelling
+    of itself, which plain ``repr`` would let happen (``1.5`` and ``"1.5"`` hashed
+    identically before the tag). Lists and tuples intentionally share one form: for
+    content addressing, same content is same address.
     """
     if isinstance(obj, Mapping):
         return {str(k): _canonical(obj[k]) for k in sorted(obj, key=str)}
@@ -33,7 +37,7 @@ def _canonical(obj: Any) -> Any:
     if isinstance(obj, (str, int, bool)) or obj is None:
         return obj
     if isinstance(obj, float):
-        return repr(obj)
+        return {"$float": repr(obj)}
     if isinstance(obj, Path):
         return str(obj)
     if hasattr(obj, "model_dump"):  # pydantic
@@ -63,10 +67,14 @@ def hash_file(path: str | Path, *, length: int = DIGEST_LEN) -> str:
 def hash_files(paths: Iterable[str | Path], *, length: int = DIGEST_LEN) -> str:
     """Digest of a set of files, independent of iteration order.
 
-    Hashes ``(relative-name, content-digest)`` pairs rather than concatenated bytes, so a
-    rename is detected and file ordering is irrelevant.
+    Hashes ``(path-as-given, content-digest)`` pairs rather than concatenated bytes, so
+    any rename or move between directories is detected and file ordering is irrelevant.
+    Keying by the *full* given path matters: two ``weights.json`` in different
+    directories are different inputs, and keying by basename made their contents
+    interchangeable without a hash change. Callers wanting a root-relative view
+    (relocation-invariant) should use :func:`hash_dir`.
     """
-    entries = sorted((str(Path(p).name), hash_file(p)) for p in paths)
+    entries = sorted((str(p), hash_file(p)) for p in paths)
     return hash_obj(entries, length=length)
 
 

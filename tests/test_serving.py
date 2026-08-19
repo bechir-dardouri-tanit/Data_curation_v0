@@ -6,9 +6,11 @@ import pytest
 
 from medrl.core.config import ClusterConfig, EvalConfig, ServingPattern
 from medrl.eval.config_loader import load_eval_config
+from medrl.eval.extraction import ExtractionPath, extract_mcqa
 from medrl.eval.serving.vllm import ServePhase, plan_deployment
 from medrl.eval.tasks.benchmarks import TASKS
 from medrl.eval.tasks.prompts import MCQA_GRAMMAR, build_mcqa_user
+from medrl.eval.verifiers import verify_letter
 
 
 @pytest.fixture()
@@ -114,6 +116,35 @@ def test_mcqa_prompt_carries_the_contract() -> None:
     assert "A. 1 mg" in prompt and "D. 10 mg" in prompt
     # The grammar the guided decoder enforces matches the contract sentence.
     assert MCQA_GRAMMAR == "Answer: [A-E]"
+
+
+def test_mmlu_pro_tasks_use_the_ten_option_alphabet() -> None:
+    # Regression: MMLU-Pro has 10 options, but the tasks were constrained AND scored on
+    # A-E -- items with gold F-J were forced into a wrong letter by guided decoding and
+    # unextractable anyway. ~Half of both benchmarks was silently unwinnable.
+    for name in ("mmlu_pro", "mmlu_pro_health"):
+        spec = TASKS.get(name)
+        assert spec.letters == "ABCDEFGHIJ", name
+        assert spec.guided_decoding == "Answer: [A-J]", name
+        r = extract_mcqa("Reasoning...\nAnswer: H", spec.letters)
+        assert (r.value, r.path) == ("H", ExtractionPath.CONTRACT), name
+        assert verify_letter("h", "H", spec.letters), name
+    # The A-E default still rejects F-J: five-option tasks keep the tight contract.
+    assert extract_mcqa("Answer: H").path is ExtractionPath.FAILED
+    assert not verify_letter("H", "H")
+
+
+def test_task_spec_rejects_gappy_alphabets() -> None:
+    with pytest.raises(ValueError, match="contiguous"):
+        TASKS.get("medqa").with_overrides(letters="ABDE")
+
+
+def test_build_mcqa_user_honors_letter_start() -> None:
+    # Regression: the parameter was accepted and ignored.
+    rendered = build_mcqa_user("Q?", ["first", "second", "third"], letter_start="C")
+    assert "C. first" in rendered and "D. second" in rendered and "E. third" in rendered
+    with pytest.raises(ValueError, match="one uppercase letter"):
+        build_mcqa_user("Q?", ["x"], letter_start="1")
 
 
 def test_every_decision_benchmark_has_a_verifier() -> None:

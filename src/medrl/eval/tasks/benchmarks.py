@@ -11,15 +11,20 @@ from __future__ import annotations
 from typing import Any
 
 from medrl.core.config import Grade, Language
-from medrl.eval.tasks.prompts import MCQA_GRAMMAR
+from medrl.eval.tasks.prompts import mcqa_grammar
 from medrl.eval.tasks.spec import TASKS, PromptStyle, TaskSpec, VerifyStyle, register_task
 
+# MMLU-Pro's defining change is 10 answer choices; anything less forces-and-scores
+# every F-J-gold item wrong (the grammar forbids the letter, the verifier can't read it).
+_MMLU_PRO_LETTERS = "ABCDEFGHIJ"
 
-def _mcqa_kw() -> dict[str, Any]:
+
+def _mcqa_kw(letters: str = "ABCDE") -> dict[str, Any]:
     return {
         "prompt_style": PromptStyle.MCQA_LETTER,
         "verify_style": VerifyStyle.LETTER,
-        "guided_decoding": MCQA_GRAMMAR,
+        "letters": letters,
+        "guided_decoding": mcqa_grammar(letters),
     }
 
 # ---- decision-grade English MCQA / reasoning -----------------------------------------
@@ -35,7 +40,7 @@ register_task(TaskSpec(
 register_task(TaskSpec(
     name="mmlu_pro_health", loader="mmlu_pro", grade=Grade.DECISION, language=Language.EN,
     hf_id="TIGER-Lab/MMLU-Pro", subset="health", split="test", requires_judge=False,
-    **_mcqa_kw(),
+    **_mcqa_kw(_MMLU_PRO_LETTERS),
 ))
 register_task(TaskSpec(
     name="medxpertqa_text", loader="medxpertqa", grade=Grade.DECISION, language=Language.EN,
@@ -90,7 +95,7 @@ register_task(TaskSpec(
 register_task(TaskSpec(
     name="mmlu_pro", loader="mmlu_pro", grade=Grade.GUARDRAIL, language=Language.EN,
     hf_id="TIGER-Lab/MMLU-Pro", split="test", notes="General-capability guardrail",
-    **_mcqa_kw(),
+    **_mcqa_kw(_MMLU_PRO_LETTERS),
 ))
 
 DECISION_SET = tuple(sorted(

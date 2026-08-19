@@ -239,6 +239,11 @@ def paired_bootstrap(
         raise ValueError(f"paired matrices must be 2-D (n_items, n_repeats), got {arr_a.shape}")
     if arr_a.shape[0] < 2:
         raise ValueError(f"need >= 2 items, got {arr_a.shape[0]}")
+    if arr_a.shape[1] < 1:
+        # A (n, 0) matrix would sail through the finite check (vacuously true) and come
+        # out the far side as an all-NaN interval with p=0.0 -- "infinitely
+        # significant" garbage. Refuse it up front, like score_benchmark does.
+        raise ValueError(f"need >= 1 repeat per item, got shape {arr_a.shape}")
     if not (np.isfinite(arr_a).all() and np.isfinite(arr_b).all()):
         raise ValueError("paired matrices contain non-finite values (NaN judge scores?)")
     if n_resamples < 1:
@@ -288,12 +293,15 @@ def promotion_gate(
 
     - Only benchmarks present in *both* dicts are compared; one-sided entries are ignored
       with a reason (there is no paired estimate to compare).
-    - A decision benchmark is *usable* only if ``max(mde_challenger, mde_baseline)`` in
-      points is ``<= max_effect_points``: the comparison's noise floor is the worse of the
-      two estimates, and a baseline measured too coarsely cannot arbitrate a promotion
-      either. Unusable benchmarks land in ``demoted`` and are ignored -- the mechanical
-      decision-grade-to-reporting demotion.
-    - Among usable benchmarks: a *win* is ``challenger.points - baseline.points`` strictly
+    - A swing **resolved beyond the benchmark's own MDE** is always classified, win or
+      loss, even when the MDE exceeds ``max_effect_points``: a benchmark too coarse to
+      arbitrate a 1pt effect still sees a 50pt collapse, and discarding that would
+      promote models that tanked a noisy benchmark.
+    - Otherwise a benchmark whose MDE exceeds ``max_effect_points`` lands in ``demoted``
+      and is ignored -- the mechanical decision-grade-to-reporting demotion. (The noise
+      floor is ``max(mde_challenger, mde_baseline)``: a baseline measured too coarsely
+      cannot arbitrate a promotion either.)
+    - Among the rest: a *win* is ``challenger.points - baseline.points`` strictly
       greater than that shared MDE; a *loss* is the mirror. Anything inside the MDE is
       noise and counts as neither.
     - Guardrail benchmarks (named in ``guardrails``) never generate wins -- their charter
@@ -344,21 +352,33 @@ def promotion_gate(
             continue
 
         mde_points = max(ch.mde_points, ba.mde_points)
-        if mde_points > max_effect_points:
+        if abs(delta_points) > mde_points:
+            # Resolved beyond the benchmark's own noise floor. Checked *before* the
+            # demotion arm: a benchmark too coarse to arbitrate a 1pt effect can still
+            # see a 50pt collapse, and discarding that (the old rule) promoted models
+            # that tanked a noisy benchmark. Symmetric on purpose -- if a swing this
+            # size is trusted enough to block a promotion, it is trusted enough to
+            # earn a win.
+            if delta_points > 0:
+                wins.append(name)
+                reasons.append(
+                    f"{name}: win (+{delta_points:.2f}pt > mde {mde_points:.2f}pt"
+                    + (f", despite mde > max effect {max_effect_points:.2f}pt" if mde_points > max_effect_points else "")
+                    + ")"
+                )
+            else:
+                losses.append(name)
+                reasons.append(
+                    f"{name}: loss ({delta_points:.2f}pt beyond mde {mde_points:.2f}pt"
+                    + (f", despite mde > max effect {max_effect_points:.2f}pt" if mde_points > max_effect_points else "")
+                    + ")"
+                )
+        elif mde_points > max_effect_points:
             demoted.append(name)
             reasons.append(
                 f"{name}: demoted to reporting (mde {mde_points:.2f}pt > "
-                f"max effect {max_effect_points:.2f}pt); ignored for the decision"
-            )
-        elif delta_points > mde_points:
-            wins.append(name)
-            reasons.append(
-                f"{name}: win (+{delta_points:.2f}pt > mde {mde_points:.2f}pt)"
-            )
-        elif delta_points < -mde_points:
-            losses.append(name)
-            reasons.append(
-                f"{name}: loss ({delta_points:.2f}pt beyond mde {mde_points:.2f}pt)"
+                f"max effect {max_effect_points:.2f}pt); unresolved and too coarse to "
+                f"arbitrate a {max_effect_points:.2f}pt effect"
             )
         else:
             reasons.append(

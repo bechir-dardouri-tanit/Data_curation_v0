@@ -23,6 +23,7 @@ import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import lru_cache
 from typing import Any
 
 # Decoration a model may wrap around the answer letter ("**B**", '"B"', "(B)", "[B]").
@@ -44,6 +45,38 @@ _ANSWER_RE = re.compile(
     r"Answer:\s*[" + re.escape(DECOR_OPEN) + r"]{0,4}\(?([A-Ea-e])\)?(?![A-Za-z0-9])"
 )
 _BOXED_OPEN_RE = re.compile(r"\\boxed\s*\{")
+
+
+def _validate_letters(letters: str) -> str:
+    """Alphabets must be one contiguous uppercase range (``ABCDE``, ``ABCDEFGHIJ``).
+
+    The letter-facing regexes are built as ``[first-last]`` classes, and a task
+    misconfigured with a gappy alphabet would silently never match the gaps' answers.
+    """
+    upper = letters.upper()
+    if not upper or not ("A" <= upper[0] <= "Z" and "A" <= upper[-1] <= "Z"):
+        raise ValueError(f"letters must be uppercase A-Z, got {letters!r}")
+    if ord(upper[-1]) - ord(upper[0]) + 1 != len(upper):
+        raise ValueError(f"letters must be contiguous, got {letters!r}")
+    return upper
+
+
+@lru_cache(maxsize=16)
+def _answer_re(letters: str) -> re.Pattern[str]:
+    """The CONTRACT marker regex for a non-default alphabet (default uses _ANSWER_RE).
+
+    Mirrors ``_ANSWER_RE``'s shape; the only difference is the letter class.
+    """
+    return re.compile(
+        r"Answer:\s*[" + re.escape(DECOR_OPEN) + r"]{0,4}\(?(["
+        + letters[0]
+        + "-"
+        + letters[-1]
+        + letters[0].lower()
+        + "-"
+        + letters[-1].lower()
+        + "])\)?(?![A-Za-z0-9])"
+    )
 
 # A numeric literal is accepted only when its punctuation is unambiguous. The trailing
 # lookahead rejects a digit or a comma-followed-by-digit, so "1,234" matches as one
@@ -110,21 +143,22 @@ class ExtractionStats:
     by_path: dict[str, int]
 
 
-def normalize_letter(token: str | None) -> str | None:
-    """Reduce any decorated single-letter answer to a bare uppercase A-E.
+def normalize_letter(token: str | None, letters: str = _LETTERS) -> str | None:
+    """Reduce any decorated single-letter answer to a bare uppercase member of ``letters``.
 
     This is the one canonical alphabet normalizer, shared with
     :func:`medrl.eval.verifiers.letters.verify_letter`, so eval scoring and RL rewards
     cannot disagree about whether "(b)" equals "B". Anything that is not exactly one
     letter after stripping decoration ("Beta", "A-E", "", ``None``) returns ``None`` --
-    callers treat that as "no answer", never as an error.
+    callers treat that as "no answer", never as an error. ``letters`` is the task's
+    answer alphabet (A-E default; A-J for MMLU-Pro-style 10-option tasks).
     """
     if not token:
         return None
     stripped = token.strip().strip(_LETTER_DECOR).strip()
     if len(stripped) == 1:
         upper = stripped.upper()
-        if upper in _LETTERS:
+        if upper in letters:
             return upper
     return None
 
@@ -216,8 +250,9 @@ def scan_numbers(text: str) -> list[tuple[tuple[int, int], float]]:
     return found
 
 
-def extract_mcqa(text: str) -> ExtractionResult:
-    """Extract a single A-E choice from a completion. Total: never raises, logs nothing.
+def extract_mcqa(text: str, letters: str = _LETTERS) -> ExtractionResult:
+    """Extract a single choice in ``letters`` from a completion. Total: never raises on
+    model output (an invalid ``letters`` is a config bug and raises).
 
     Priority order, first hit wins: CONTRACT (the prompted ``Answer: X`` marker) >
     GUIDED_JSON (a ``{"answer": "B"}`` object from guided decoding, even with trailing
@@ -229,11 +264,13 @@ def extract_mcqa(text: str) -> ExtractionResult:
     """
     if not text:
         return ExtractionResult(value=None, path=ExtractionPath.FAILED, span=None)
+    letters = _validate_letters(letters)
+    answer_re = _ANSWER_RE if letters == _LETTERS else _answer_re(letters)
 
-    matches = list(_ANSWER_RE.finditer(text))
+    matches = list(answer_re.finditer(text))
     if matches:
         m = matches[-1]
-        letter = normalize_letter(m.group(1))
+        letter = normalize_letter(m.group(1), letters)
         if letter is not None:
             return ExtractionResult(letter, ExtractionPath.CONTRACT, (m.start(), m.end()))
 
@@ -249,7 +286,7 @@ def extract_mcqa(text: str) -> ExtractionResult:
         raw = obj.get("answer")
         if not isinstance(raw, str):
             continue
-        letter = normalize_letter(raw)
+        letter = normalize_letter(raw, letters)
         if letter is not None:
             json_result = ExtractionResult(letter, ExtractionPath.GUIDED_JSON, (start, end))
     if json_result is not None:
@@ -257,7 +294,7 @@ def extract_mcqa(text: str) -> ExtractionResult:
 
     boxed_result: ExtractionResult | None = None
     for start, content_start, content_end, end in _boxed_spans(text):
-        letter = normalize_letter(text[content_start:content_end])
+        letter = normalize_letter(text[content_start:content_end], letters)
         if letter is not None:
             boxed_result = ExtractionResult(letter, ExtractionPath.BOXED, (start, end))
     if boxed_result is not None:
@@ -270,7 +307,7 @@ def extract_mcqa(text: str) -> ExtractionResult:
     for line in text.splitlines(keepends=True):
         stripped = line.strip()
         if stripped:
-            letter = normalize_letter(stripped)
+            letter = normalize_letter(stripped, letters)
             if letter is not None:
                 line_start = offset + (len(line) - len(line.lstrip()))
                 last_line = ExtractionResult(

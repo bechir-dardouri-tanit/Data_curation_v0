@@ -170,6 +170,13 @@ def test_paired_bootstrap_detects_real_effect() -> None:
     assert p < 0.05
 
 
+def test_paired_bootstrap_rejects_zero_repeats() -> None:
+    # Regression: (n, 0) matrices used to return an all-NaN CI with p=0.0 -- the finite
+    # check passes vacuously on an empty repeat axis.
+    with pytest.raises(ValueError, match=">= 1 repeat"):
+        paired_bootstrap(np.zeros((4, 0)), np.zeros((4, 0)))
+
+
 def test_paired_bootstrap_cancels_item_difficulty_variance() -> None:
     # Shared item difficulty dominates; only pairing removes it. An independent-resample
     # (unpaired) comparison on the same data pays that variance twice and misses the effect.
@@ -320,11 +327,13 @@ def test_promotion_gate_guardrail_regression_tolerance() -> None:
     assert equal.guardrail_violations == []
 
 
-def test_promotion_gate_demotes_benchmark_with_large_mde() -> None:
-    # 8 items of noisy binary scoring: the delta is huge but unmeasurable at this n.
+def test_promotion_gate_resolves_swings_beyond_the_noise_floor() -> None:
+    # 8 items of noisy binary scoring (mde ~38pt). A +50pt swing exceeds even that
+    # floor, so it is classified as a win regardless of max_effect_points: a benchmark
+    # too coarse to arbitrate a 1pt effect still sees a 50pt one. (The old rule demoted
+    # it -- symmetric with the loss case below, which promoted models that tanked a
+    # noisy benchmark.)
     base_scores = np.repeat(np.array([[0.0], [1.0], [0.0], [1.0], [1.0], [0.0], [1.0], [0.0]]), 2, axis=1)
-    # Challenger fixes every item: +50pt delta. Still unmeasurable at n=8 (mde ~38pt),
-    # which is the point -- a huge delta does not bypass the noise floor.
     chal_scores = np.ones((8, 2))
     base = {"noisy": score_benchmark("noisy", base_scores, n_resamples=1_000, seed=0)}
     chal = {"noisy": score_benchmark("noisy", chal_scores, n_resamples=1_000, seed=0)}
@@ -332,16 +341,39 @@ def test_promotion_gate_demotes_benchmark_with_large_mde() -> None:
     assert chal["noisy"].points > base["noisy"].points
 
     decision = promotion_gate(chal, base, min_wins=1, max_effect_points=1.0)
+    assert decision.promoted
+    assert decision.wins == ["noisy"]
+    assert decision.demoted == []
+    assert any("despite mde > max effect" in r for r in decision.reasons)
+
+
+def test_promotion_gate_blocks_coarse_benchmark_collapses() -> None:
+    # Regression (review finding): a resolved LOSS on an over-MDE benchmark used to be
+    # demoted-and-ignored, so a model that tanked it could still promote.
+    base_scores = np.repeat(np.array([[0.0], [1.0], [0.0], [1.0], [1.0], [0.0], [1.0], [0.0]]), 2, axis=1)
+    chal_scores = np.zeros((8, 2))  # challenger breaks every item: -50pt
+    base = {"noisy": score_benchmark("noisy", base_scores, n_resamples=1_000, seed=0)}
+    chal = {"noisy": score_benchmark("noisy", chal_scores, n_resamples=1_000, seed=0)}
+
+    decision = promotion_gate(chal, base, min_wins=1, max_effect_points=1.0)
+    assert not decision.promoted
+    assert decision.losses == ["noisy"]
+    assert decision.demoted == []
+
+
+def test_promotion_gate_demotes_unresolved_coarse_benchmark() -> None:
+    # Delta within the noise floor AND mde > max_effect: nothing to arbitrate with.
+    base_scores = np.repeat(np.array([[0.0], [1.0], [0.0], [1.0], [1.0], [0.0], [1.0], [0.0]]), 2, axis=1)
+    chal_scores = np.repeat(np.array([[0.0], [1.0], [1.0], [1.0], [1.0], [0.0], [1.0], [0.0]]), 2, axis=1)
+    base = {"noisy": score_benchmark("noisy", base_scores, n_resamples=1_000, seed=0)}
+    chal = {"noisy": score_benchmark("noisy", chal_scores, n_resamples=1_000, seed=0)}
+    assert abs(chal["noisy"].points - base["noisy"].points) < base["noisy"].mde_points
+
+    decision = promotion_gate(chal, base, min_wins=1, max_effect_points=1.0)
     assert not decision.promoted
     assert decision.demoted == ["noisy"]
-    assert decision.wins == []
+    assert decision.wins == [] and decision.losses == []
     assert any("demoted to reporting" in r for r in decision.reasons)
-
-    # Same inputs, a threshold that tolerates the noise floor: it becomes a win.
-    tolerant = promotion_gate(chal, base, min_wins=1, max_effect_points=50.0)
-    assert tolerant.promoted
-    assert tolerant.wins == ["noisy"]
-    assert tolerant.demoted == []
 
 
 def test_promotion_gate_ignores_one_sided_benchmarks() -> None:
