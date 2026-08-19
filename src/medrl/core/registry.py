@@ -10,12 +10,9 @@ from __future__ import annotations
 
 import difflib
 from collections.abc import Callable, Iterator
-from typing import Generic, TypeVar
-
-T = TypeVar("T")
 
 
-class Registry(Generic[T]):
+class Registry[T]:
     """A name -> object mapping with duplicate detection and did-you-mean lookup."""
 
     def __init__(self, kind: str) -> None:

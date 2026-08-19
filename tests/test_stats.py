@@ -193,7 +193,7 @@ def test_paired_bootstrap_cancels_item_difficulty_variance() -> None:
     paired_width = paired_ci.high - paired_ci.low
     unpaired_width = float(unpaired_high - unpaired_low)
     assert paired_width < unpaired_width / 3.0
-    assert 0.0 < paired_ci.low  # paired: the +0.02 effect is resolved
+    assert paired_ci.low > 0.0  # paired: the +0.02 effect is resolved
     assert float(unpaired_low) < 0.0 < float(unpaired_high)  # unpaired: same effect drowned
 
 
