@@ -33,6 +33,37 @@ _PROBE_PROMPTS = (
     "Un patient de 54 ans présente une douleur thoracique.",
 )
 
+_LOGIT_ATOL = 1e-3
+_LOGIT_RTOL = 0.02
+
+
+class SurgeryVerificationError(RuntimeError):
+    """Logit equivalence failed on the text probes; the checkpoint was **not** saved.
+
+    A distinct type (not a bare ``RuntimeError``) so the CLI can fail with exit 1 --
+    "the conversion is wrong" -- instead of exit 2's "the training stack is missing".
+    """
+
+
+def _equivalence_ok(
+    max_diff: float,
+    max_ref_abs: float,
+    *,
+    atol: float = _LOGIT_ATOL,
+    rtol: float = _LOGIT_RTOL,
+) -> bool:
+    """Gate for the text-probe logit comparison, in the units the probe measures.
+
+    An absolute tolerance alone cannot work here: the models run in bf16, whose unit
+    roundoff is 2^-8 (~0.4%), so two kernel paths over *identical* weights can differ
+    by a couple of ULP -- ~0.25 absolute where logits reach ~30 -- while a misrouted
+    (randomly initialised) tensor produces diffs of the same order as the logits
+    themselves. The gate is therefore relative: ``rtol`` of the largest reference logit
+    (2%, ~5 bf16 ULP) plus an ``atol`` floor for near-zero logits. Pure so the decision
+    is unit-testable without torch.
+    """
+    return max_diff <= atol + rtol * max_ref_abs
+
 
 def convert(
     source: str,
@@ -42,7 +73,12 @@ def convert(
     revision: str | None = None,
     dtype: str = "bfloat16",
 ) -> dict[str, Any]:
-    """Strip vision + MTP, verify text equivalence, save. Returns a summary dict."""
+    """Strip vision + MTP, verify text equivalence, save. Returns a summary dict.
+
+    Raises :class:`SurgeryVerificationError` (before anything is written to
+    ``output``) when the probes disagree beyond tolerance -- a warning string nobody
+    parses is not a gate.
+    """
     try:
         import torch
         from transformers import AutoTokenizer, Qwen3_5ForCausalLM, Qwen3_5ForConditionalGeneration
@@ -75,15 +111,22 @@ def convert(
     )
     text_model.config.architectures = ["Qwen3_5ForCausalLM"]
 
-    max_diff = None
+    max_diff: float | None = None
     if verify_logits:
-        max_diff = _verify_equivalence(reference, text_model, tokenizer, torch)
-        log.info("max |logit diff| on text probes: %.3e", max_diff)
+        max_diff, max_ref_abs = _verify_equivalence(reference, text_model, tokenizer, torch)
+        tolerance = _LOGIT_ATOL + _LOGIT_RTOL * max_ref_abs
+        log.info("max |logit diff| on text probes: %.3e (tolerance %.3e)", max_diff, tolerance)
+        if not _equivalence_ok(max_diff, max_ref_abs):
+            raise SurgeryVerificationError(
+                f"logit diff {max_diff:.3e} exceeds tolerance {tolerance:.3e} "
+                f"(atol {_LOGIT_ATOL:g} + rtol {_LOGIT_RTOL:g} * max|logit| {max_ref_abs:.3e}); "
+                "the prefix remap may have misrouted tensors -- checkpoint NOT saved"
+            )
 
     text_model.save_pretrained(out_path)
     tokenizer.save_pretrained(out_path)
 
-    summary: dict[str, Any] = {
+    return {
         "source": source,
         "output": str(out_path),
         "mtp_sidecar": str(mtp_dir) if mtp_state else None,
@@ -92,21 +135,22 @@ def convert(
         "max_logit_diff": max_diff,
         "architectures": text_model.config.architectures,
     }
-    if max_diff is not None and max_diff > 1e-3:
-        summary["warning"] = (
-            f"logit diff {max_diff:.3e} exceeds 1e-3; the prefix remap may have misrouted "
-            "tensors -- do NOT train or serve this checkpoint"
-        )
-    return summary
 
 
-def _verify_equivalence(reference: Any, text_model: Any, tokenizer: Any, torch: Any) -> float:
-    """Max abs logit difference over text probes; must be numerically ~0."""
+def _verify_equivalence(
+    reference: Any, text_model: Any, tokenizer: Any, torch: Any
+) -> tuple[float, float]:
+    """Max abs logit difference and max |reference logit| over the text probes.
+
+    The second number scales the tolerance: see :func:`_equivalence_ok`.
+    """
     max_diff = 0.0
+    max_ref_abs = 0.0
     for prompt in _PROBE_PROMPTS:
         inputs = tokenizer(prompt, return_tensors="pt")
         with torch.no_grad():
             ref_logits = reference(**inputs).logits
             text_logits = text_model(**inputs).logits
         max_diff = max(max_diff, float((ref_logits - text_logits).abs().max()))
-    return max_diff
+        max_ref_abs = max(max_ref_abs, float(ref_logits.abs().max()))
+    return max_diff, max_ref_abs

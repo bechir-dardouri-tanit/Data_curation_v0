@@ -183,11 +183,18 @@ QWEN35_9B_EXPECTATIONS: dict[str, Any] = {
     "num_key_value_heads": 4,
     "mtp_num_hidden_layers": 1,
     "attn_output_gate": True,
+    "linear_num_key_heads": 16,
+    "linear_key_head_dim": 128,
+    "linear_num_value_heads": 32,
+    "linear_value_head_dim": 128,
 }
 """Ground truth for ``Qwen/Qwen3.5-9B`` (revision c2022362), verified 2026-08.
 
 ``layer_type_counts`` is compared exactly: the 3:1 hybrid ratio is what the parallelism and
-KV-cache plans are derived from.
+KV-cache plans are derived from. The ``linear_*`` head geometry is asserted because the
+fp32 Gated-DeltaNet recurrent state -- ``num_value_heads * key_head_dim * value_head_dim``
+per layer, the term the FSDP mixed-precision policy is derived from -- scales with exactly
+these numbers; a revision that changes them silently invalidates the memory plan.
 """
 
 

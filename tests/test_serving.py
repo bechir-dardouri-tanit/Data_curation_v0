@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from medrl.core.config import EvalConfig, ServingPattern
+from medrl.core.config import ClusterConfig, EvalConfig, ServingPattern
 from medrl.eval.config_loader import load_eval_config
 from medrl.eval.serving.vllm import ServePhase, plan_deployment
 from medrl.eval.tasks.benchmarks import TASKS
@@ -52,6 +52,28 @@ def test_split_gpu_concedes_policy_to_one_gpu() -> None:
 def test_judge_phase_has_no_reasoning_parser(eval_config: EvalConfig) -> None:
     judge = plan_deployment(eval_config, policy_port=8100, judge_port=8101).phases[1]
     assert judge.reasoning_parser is None  # judges see raw text, not split reasoning
+
+
+def test_partial_tp_cluster_plans_first_tp_gpus() -> None:
+    # Regression: node_8xh100 ships tensor_parallel=4 of 8 GPUs; the planner used to
+    # hand the policy all 8 and crash the tp-vs-gpu-count validation.
+    cfg = load_eval_config("decision_grade").model_copy(
+        update={"cluster": ClusterConfig(name="node_8xh100", num_gpus=8, tensor_parallel=4)}
+    )
+    plan = plan_deployment(cfg, policy_port=8100, judge_port=8101)
+    assert plan.policy.gpu_ids == (0, 1, 2, 3)
+    assert plan.policy.tensor_parallel == 4
+
+
+def test_split_gpu_needs_two_gpus() -> None:
+    cfg = load_eval_config("fast").model_copy(
+        update={
+            "cluster": ClusterConfig(name="one_gpu", num_gpus=1, tensor_parallel=1),
+            "serving": ServingPattern.SPLIT_GPU,
+        }
+    )
+    with pytest.raises(ValueError, match="split_gpu"):
+        plan_deployment(cfg)
 
 
 def test_phase_rejects_tp_gpu_mismatch() -> None:

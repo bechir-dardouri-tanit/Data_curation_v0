@@ -28,11 +28,12 @@ from typing import Any
 # Decoration a model may wrap around the answer letter ("**B**", '"B"', "(B)", "[B]").
 # Kept as data (and public) so every letter-facing regex here and in
 # :mod:`medrl.eval.verifiers.format_rules` shares one vocabulary by construction
-# instead of by coincidence. Curly quotes are escaped because ruff flags the raw
-# glyphs as ambiguous look-alikes; an escape is cheaper than a lint exemption.
+# instead of by coincidence. Curly quotes and guillemets are escaped because ruff
+# flags the raw glyphs as ambiguous look-alikes; an escape is cheaper than a lint
+# exemption. Guillemets matter for real: French models write "Answer: \u00abB\u00bb".
 _MARKDOWN_DECOR = "*`_~"
-DECOR_OPEN = "\"'\u201c\u2018(<[" + _MARKDOWN_DECOR
-DECOR_CLOSE = _MARKDOWN_DECOR + "\"'\u201d\u2019.)>]:,!"
+DECOR_OPEN = "\"'\u201c\u2018\u00ab(<[" + _MARKDOWN_DECOR
+DECOR_CLOSE = _MARKDOWN_DECOR + "\"'\u201d\u2019\u00bb.)>]:,!"
 _LETTER_DECOR = DECOR_OPEN + DECOR_CLOSE + "!{}"
 
 # The output-contract marker is case-sensitive on purpose: "Answer:" is what the prompt
@@ -54,7 +55,7 @@ _NUMBER_RE = re.compile(
     r"(?<![\w.])(?<!\d,)"
     r"[-+\u2212\uFE63]?"
     r"(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d*\.?\d+)"
-    r"(?:[eE][-+]?\d+)?"
+    r"(?:[eE][-+\u2212\uFE63]?\d+)?"
     r"(?!\d)(?!,\d)"
 )
 # Trailing unit of a quantity: an optional single space then unit characters. Deliberately
@@ -262,6 +263,9 @@ def extract_mcqa(text: str) -> ExtractionResult:
     if boxed_result is not None:
         return boxed_result
 
+    # LAST_LINE: the last bare-letter line wins, like every other path -- a model that
+    # writes "A" while enumerating options and commits to "B" at the end answered B.
+    last_line: ExtractionResult | None = None
     offset = 0
     for line in text.splitlines(keepends=True):
         stripped = line.strip()
@@ -269,10 +273,12 @@ def extract_mcqa(text: str) -> ExtractionResult:
             letter = normalize_letter(stripped)
             if letter is not None:
                 line_start = offset + (len(line) - len(line.lstrip()))
-                return ExtractionResult(
+                last_line = ExtractionResult(
                     letter, ExtractionPath.LAST_LINE, (line_start, line_start + len(stripped))
                 )
         offset += len(line)
+    if last_line is not None:
+        return last_line
 
     return ExtractionResult(value=None, path=ExtractionPath.FAILED, span=None)
 

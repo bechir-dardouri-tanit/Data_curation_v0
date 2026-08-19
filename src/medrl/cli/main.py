@@ -110,9 +110,16 @@ def model_convert(
 ) -> None:
     """Emit the text-only checkpoint (strip vision + MTP) with equivalence checking."""
     try:
-        from medrl.model.surgery import convert  # requires torch + transformers
+        from medrl.model.surgery import (  # requires torch + transformers
+            SurgeryVerificationError,
+            convert,
+        )
 
         result = convert(source, out, verify_logits=verify_logits)
+    except SurgeryVerificationError as exc:
+        # Must precede the RuntimeError arm: the checkpoint is wrong, not unavailable.
+        console.print(f"[red]verification failed, nothing written[/]: {exc}")
+        raise typer.Exit(1) from exc
     except (ImportError, RuntimeError) as exc:
         # RuntimeError is surgery's own guard: its torch import is deferred to call time.
         console.print(f"[red]training stack not available[/]: {exc}")

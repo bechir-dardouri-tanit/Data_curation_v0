@@ -99,6 +99,13 @@ def test_moe_fixture_is_flagged() -> None:
         ("head_dim", 128),
         ("mtp_num_hidden_layers", 0),
         ("attn_output_gate", False),
+        # The fp32 SSM recurrent state scales with exactly these; halving one must fail
+        # the probe, not silently invalidate the memory plan (regression: all four were
+        # extracted but never asserted).
+        ("linear_num_key_heads", 8),
+        ("linear_key_head_dim", 64),
+        ("linear_num_value_heads", 16),
+        ("linear_value_head_dim", 64),
     ],
 )
 def test_drift_raised_per_key(profile, key: str, value: object) -> None:

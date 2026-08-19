@@ -111,13 +111,22 @@ def plan_deployment(
     """Compute the serving plan for an eval config from the cluster preset alone."""
     cluster = config.cluster
     all_gpus = tuple(range(cluster.num_gpus))
+    if config.serving is ServingPattern.SPLIT_GPU and cluster.num_gpus < 2:
+        raise ValueError(
+            "split_gpu serving needs >=2 GPUs (policy and judge each own one); "
+            "use serving=sequential on a single-GPU cluster"
+        )
     policy_len = min(cluster.max_model_len, config.thinking.total_budget + 8192)
 
+    # The policy takes the first `tensor_parallel` GPUs, not all of them: a tp<size
+    # cluster (node_8xh100 defaults to tp=4 of 8) left the rest idle at best and
+    # crashed the tp-vs-gpu-count validation at worst. ClusterConfig has already
+    # validated tp <= num_gpus and num_gpus % tp == 0.
     policy = ServePhase(
         role="policy",
         model=config.model,
-        gpu_ids=all_gpus if cluster.tensor_parallel > 1 else all_gpus[:1],
-        tensor_parallel=max(1, cluster.tensor_parallel if cluster.num_gpus > 1 else 1),
+        gpu_ids=all_gpus[: cluster.tensor_parallel],
+        tensor_parallel=cluster.tensor_parallel,
         max_model_len=policy_len,
         gpu_memory_utilization=cluster.gpu_memory_utilization,
         port=policy_port or free_port(),

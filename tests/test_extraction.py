@@ -105,6 +105,22 @@ def test_last_line_variants() -> None:
     assert extract_mcqa("Answer: A\nB").value == "A"
 
 
+def test_last_line_takes_the_last_occurrence() -> None:
+    # Regression: the loop used to return the FIRST bare-letter line, contradicting the
+    # documented "within a path the last occurrence wins" -- a model enumerating options
+    # as "A" before committing to "B" was scored as A.
+    r = extract_mcqa("A\nbecause the labs rule out the others\n\nB")
+    assert (r.value, r.path) == ("B", ExtractionPath.LAST_LINE)
+
+
+def test_french_guillemets_are_decoration() -> None:
+    # Regression: "Answer: «B»" failed extraction outright on the FR benchmarks.
+    r = extract_mcqa("Réponse très claire.\n\nAnswer: «B»")
+    assert (r.value, r.path) == ("B", ExtractionPath.CONTRACT)
+    bare = extract_mcqa("text\n«C»")
+    assert (bare.value, bare.path) == ("C", ExtractionPath.LAST_LINE)
+
+
 def test_answer_before_thinking_block_is_still_found() -> None:
     text = "Answer: B\n</think>\nActually, let me reconsider the labs.\nNo final marker."
     assert extract_mcqa(text).value == "B"

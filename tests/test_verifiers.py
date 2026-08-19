@@ -66,6 +66,14 @@ def test_parse_quantity() -> None:
     assert parse_quantity("1,23") is None  # ambiguous comma, refuse to guess
 
 
+def test_parse_quantity_unicode_minus_in_exponent() -> None:
+    # Regression: the exponent group only accepted ASCII +/-, so "1e\u22125" silently
+    # extracted the mantissa alone -- a 100000x error in a dosage.
+    assert parse_quantity("1e\u22125 mol") == (1e-05, "mol")
+    assert parse_quantity("\u22121.5e\u22123 g") == (-1.5e-03, "g")
+    assert parse_quantity("2E+3 U") == (2000.0, "U")
+
+
 # ---------------------------------------------------------------------------------------
 # format rules: substring and length rules
 # ---------------------------------------------------------------------------------------
