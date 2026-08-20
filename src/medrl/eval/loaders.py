@@ -327,13 +327,29 @@ def _is_gated(exc: BaseException) -> bool:
 def _downloaded_files(spec: TaskSpec, pattern: str) -> list[str]:
     from huggingface_hub import HfApi, hf_hub_download
 
-    files = [f for f in HfApi().list_repo_files(spec.hf_id or "") if _glob_match(f, pattern)]
-    if len(files) != 1:
-        raise LoaderError(
-            f"{spec.hf_id}: expected exactly one file matching {pattern!r}, found {files}; "
-            "pin the filename in the task spec to restore determinism"
-        )
-    return [hf_hub_download(repo_id=spec.hf_id or "", filename=files[0])]
+    try:
+        # repo_type is the difference between the datasets API and the models API:
+        # omitting it resolves e.g. openai/healthbench against /api/models/ and
+        # misreports the resulting 401 as a credentials problem.
+        files = [
+            f for f in HfApi().list_repo_files(spec.hf_id or "", repo_type="dataset")
+            if _glob_match(f, pattern)
+        ]
+        if len(files) != 1:
+            raise LoaderError(
+                f"{spec.hf_id}: expected exactly one file matching {pattern!r}, found {files}; "
+                "pin the filename in the task spec to restore determinism"
+            )
+        return [hf_hub_download(repo_id=spec.hf_id or "", filename=files[0], repo_type="dataset")]
+    except LoaderError:
+        raise
+    except Exception as exc:
+        if _is_gated(exc):
+            raise GatedDatasetError(
+                f"{spec.hf_id} is gated: accept the terms on the Hub and provide credentials "
+                "(hf auth login, or HF_TOKEN in the environment) before running this benchmark"
+            ) from exc
+        raise
 
 
 def _glob_match(name: str, pattern: str) -> bool:
