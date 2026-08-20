@@ -1,0 +1,26 @@
+{
+  "medqa": {
+    "benchmark": "medqa",
+    "points": 75.0,
+    "ci_low": 54.166666666666664,
+    "ci_high": 95.83333333333334,
+    "n_items": 12,
+    "n_repeats": 2,
+    "repeats_missing": 0,
+    "extraction_fail_rate": 0.0,
+    "think_completion_rate": 1.0,
+    "mde_points": 23.028309323591913
+  },
+  "medmcqa": {
+    "benchmark": "medmcqa",
+    "points": 83.33333333333334,
+    "ci_low": 70.83333333333334,
+    "ci_high": 95.83333333333334,
+    "n_items": 12,
+    "n_repeats": 2,
+    "repeats_missing": 0,
+    "extraction_fail_rate": 0.0,
+    "think_completion_rate": 1.0,
+    "mde_points": 14.21338109037403
+  }
+}

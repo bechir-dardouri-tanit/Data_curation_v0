@@ -180,7 +180,7 @@ def generate_all(
     thinking: ThinkingConfig,
     store: CompletionStore,
     *,
-    max_workers: int = 32,
+    max_workers: int = 192,
 ) -> dict[str, int]:
     """Generate every missing (item, repeat) completion. Returns per-benchmark counts."""
     todo: list[tuple[EvalItem, int]] = []
