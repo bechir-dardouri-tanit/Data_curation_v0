@@ -13,4 +13,4 @@ thinking: {mode: "off", think_budget: 0, answer_budget: 2048}
 serving: sequential
 max_extraction_fail_rate: 0.2
 judge: fast
-benchmarks: [medqa, medmcqa, mmlu_pro_health, medxpertqa_text, medcalc, mediqal, healthbench_hard, frenchmedmcqa]
+benchmarks: [medqa, medmcqa, mmlu_pro_health, medxpertqa_text, medcalc, mediqal, healthbench_hard]

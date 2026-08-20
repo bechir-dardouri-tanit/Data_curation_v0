@@ -1,4 +1,6 @@
 # French decision benchmarks only.
+# frenchmedmcqa needs HF authentication (anonymous /resolve/ is denied 401) --
+# run this preset with HF_TOKEN set once a token is available.
 model:
   hf_id: Qwen/Qwen3.5-9B
   text_only: true

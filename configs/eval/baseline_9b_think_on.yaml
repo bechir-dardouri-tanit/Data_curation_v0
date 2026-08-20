@@ -1,11 +1,15 @@
 # Baseline: untouched Qwen3.5-9B, thinking ON (the model's native reasoning mode).
 # Qwen's recommended thinking sampling: temperature 0.6 / top_p 0.95.
 #
-# Benchmarks: the decision-grade set minus the two blocked entries --
-#   ifeval        needs josejg/instruction_following_eval (not on PyPI; pending
-#                 approval of that external source)
-#   gpqa_diamond  HF-gated (needs an HF token)
-# plus frenchmedmcqa, the FR decision anchor this bilingual project reports.
+# Benchmarks: the decision-grade set minus the three blocked entries --
+#   ifeval         needs josejg/instruction_following_eval (not on PyPI; pending
+#                  approval of that external source)
+#   gpqa_diamond   HF-gated (needs an HF token)
+#   frenchmedmcqa  qanastek/frenchmedmcqa denies anonymous /resolve/ downloads
+#                  (401 on README and data alike) -- same HF-token blocker
+#
+# The FR anchor is mediqal (mcqu, 4343 single-answer clinical items, decision
+# grade); frenchmedmcqa was reporting-grade only and returns once a token exists.
 #
 # Judge tier note: `fast` (Qwen3.5-4B) ranks arms but systematically inflates
 # HealthBench-Hard; its numbers here are ranking-grade until re-graded `strong`.
@@ -17,4 +21,4 @@ sampling: {temperature: 0.6, top_p: 0.95, top_k: 40, n_repeats: 4, seed: 0, max_
 thinking: {mode: "on", think_budget: 8192, answer_budget: 2048}
 serving: sequential
 judge: fast
-benchmarks: [medqa, medmcqa, mmlu_pro_health, medxpertqa_text, medcalc, mediqal, healthbench_hard, frenchmedmcqa]
+benchmarks: [medqa, medmcqa, mmlu_pro_health, medxpertqa_text, medcalc, mediqal, healthbench_hard]

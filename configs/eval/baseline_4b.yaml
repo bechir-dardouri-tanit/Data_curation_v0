@@ -8,4 +8,4 @@ sampling: {temperature: 0.6, top_p: 0.95, top_k: 40, n_repeats: 4, seed: 0, max_
 thinking: {mode: "on", think_budget: 8192, answer_budget: 2048}
 serving: sequential
 judge: fast
-benchmarks: [medqa, medmcqa, mmlu_pro_health, medxpertqa_text, medcalc, mediqal, healthbench_hard, frenchmedmcqa]
+benchmarks: [medqa, medmcqa, mmlu_pro_health, medxpertqa_text, medcalc, mediqal, healthbench_hard]
