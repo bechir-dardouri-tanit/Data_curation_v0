@@ -51,9 +51,11 @@ def test_split_gpu_concedes_policy_to_one_gpu() -> None:
     assert plan.policy.tensor_parallel == 1
 
 
-def test_judge_phase_has_no_reasoning_parser(eval_config: EvalConfig) -> None:
+def test_judge_phase_parses_reasoning_out_of_content(eval_config: EvalConfig) -> None:
     judge = plan_deployment(eval_config, policy_port=8100, judge_port=8101).phases[1]
-    assert judge.reasoning_parser is None  # judges see raw text, not split reasoning
+    # Insurance for the request-side enable_thinking=False: a leaked <think>
+    # block must be split out of content, never ahead of the JSON verdict.
+    assert judge.reasoning_parser == "qwen3"
 
 
 def test_partial_tp_cluster_plans_first_tp_gpus() -> None:

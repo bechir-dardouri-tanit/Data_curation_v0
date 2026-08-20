@@ -29,7 +29,7 @@ from medrl.core.logging import get_logger
 from medrl.eval.extraction import ExtractionPath, extract_mcqa
 from medrl.eval.generate import GenRecord
 from medrl.eval.items import EvalItem
-from medrl.eval.scorers.judge import Judge
+from medrl.eval.scorers.judge import Judge, JudgeError
 from medrl.eval.scorers.rubric import grade_with_robustness
 from medrl.eval.tasks.spec import VerifyStyle
 from medrl.eval.verifiers import parse_quantity, verify_letter, verify_number
@@ -225,13 +225,24 @@ def grade_benchmark(
                 outcome.repeats.append(grade_number(item, record))
             elif item.verify.style is VerifyStyle.RUBRIC:
                 assert judge is not None  # grade_benchmark checked before dispatch
-                outcome.repeats.append(
-                    grade_rubric(
-                        item, record, judge,
-                        n_consistency=judge_n_consistency,
-                        position_swap=judge_position_swap,
+                try:
+                    outcome.repeats.append(
+                        grade_rubric(
+                            item, record, judge,
+                            n_consistency=judge_n_consistency,
+                            position_swap=judge_position_swap,
+                        )
                     )
-                )
+                except JudgeError as exc:
+                    # A sporadic unparseable verdict is a measurement-instrument
+                    # failure, not a model result: this repeat is *missing*
+                    # (zero-filled and counted by repeats_missing in the score),
+                    # and anything systematic is caught by the _score gate
+                    # instead of aborting a finished run here.
+                    log.warning(
+                        "%s/%s repeat %d judged unparseable; counting as missing: %s",
+                        item.benchmark, item.item_id, record.repeat, exc,
+                    )
             elif item.verify.style is VerifyStyle.FORMAT_RULES:
                 outcome.repeats.append(grade_format_rules(item, record))
             else:  # pragma: no cover - VerifyStyle is closed

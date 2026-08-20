@@ -266,6 +266,10 @@ class JudgeConfig(Frozen):
     n_consistency: Annotated[int, Field(ge=1)] = 1
     position_swap: bool = True
     temperature: Annotated[float, Field(ge=0.0, le=2.0)] = 0.0
+    # Bounds the judge's generation: the verdict is a tiny JSON object, and an
+    # unbounded request lets a thinking-capable judge reason until truncation
+    # instead of answering (observed live: every rubric call failed on it).
+    max_tokens: Annotated[int, Field(ge=16)] = 512
 
     @model_validator(mode="after")
     def _reporting_needs_strong(self) -> Self:

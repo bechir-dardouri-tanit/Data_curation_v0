@@ -152,6 +152,15 @@ class LLMJudge:
     client: Any = None
     temperature: float = 0.0
     max_concurrency: int = 32
+    # The judge's reply is a tiny JSON object; an unbounded generation lets a
+    # thinking-capable judge ruminate until truncation and never emit it. 512 is
+    # orders of magnitude above the largest legitimate verdict.
+    max_tokens: int = 512
+    # vLLM-ism the runner sets for thinking-capable judges (the Qwen3.5 family
+    # this project uses for both tiers): without it the model's reasoning is
+    # emitted into content ahead of the JSON, and with no server-side reasoning
+    # parser the contract breaks on every call.
+    extra_body: dict[str, Any] | None = None
     system: str = "You are a precise rubric grader. Respond with JSON only."
 
     def _render(self, messages: list[dict[str, str]], criteria: Sequence[Criterion]) -> str:
@@ -165,10 +174,12 @@ class LLMJudge:
         response = self.client.chat.completions.create(
             model=self.model,
             temperature=self.temperature,
+            max_tokens=self.max_tokens,
             messages=[
                 {"role": "system", "content": self.system + retry_note},
                 {"role": "user", "content": user_prompt},
             ],
+            **({"extra_body": self.extra_body} if self.extra_body else {}),
         )
         return str(response.choices[0].message.content or "")
 

@@ -165,6 +165,22 @@ def test_llm_judge_raises_after_retry() -> None:
         LLMJudge(model="j", client=client).grade(CONV, CRITERIA)
 
 
+def test_llm_judge_bounds_generation_and_passes_extra_body() -> None:
+    client = _FakeClient(['{"met": ["c1"]}'])
+    extra = {"chat_template_kwargs": {"enable_thinking": False}}
+    LLMJudge(model="j", client=client, extra_body=extra).grade(CONV, CRITERIA)
+    assert client.calls[0]["max_tokens"] == 512
+    assert client.calls[0]["extra_body"] == extra
+
+
+def test_llm_judge_omits_extra_body_when_unset() -> None:
+    client = _FakeClient(['{"met": ["c1"]}'])
+    LLMJudge(model="j", client=client).grade(CONV, CRITERIA)
+    assert "extra_body" not in client.calls[0]
+    # The bound is not optional: an unbounded thinking judge never emits the JSON.
+    assert client.calls[0]["max_tokens"] == 512
+
+
 def test_llm_judge_ignores_invented_ids() -> None:
     client = _FakeClient(['{"met": ["c1", "hallucinated-9"]}'])
     verdicts = LLMJudge(model="j", client=client).grade(CONV, CRITERIA)

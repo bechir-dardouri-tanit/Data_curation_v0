@@ -158,6 +158,14 @@ def _execute(
                 client=judge_client,
                 temperature=config.judge.temperature,
                 max_concurrency=config.judge.max_concurrency,
+                max_tokens=config.judge.max_tokens,
+                # Both judge tiers are Qwen3.5: leave thinking on and the model
+                # emits its reasoning into content ahead of the JSON, breaking
+                # the parse. The OpenAI backend gets no vLLM-ism in its body.
+                extra_body=(
+                    {"chat_template_kwargs": {"enable_thinking": False}}
+                    if config.judge.backend == "vllm" else None
+                ),
             )
             outcomes = _grade_all(config, specs, loaded, store, judge=judge_obj)
     else:
@@ -181,6 +189,7 @@ def _grade_all(
         by_bench.setdefault(record.benchmark, []).append(record)
 
     outcomes: dict[str, list[ItemOutcome]] = {}
+    outcome_path = store.path.parent / "outcomes.json"
     for bench in config.benchmarks:
         jc = config.judge
         outcomes[bench.name] = grade_benchmark(
@@ -192,9 +201,12 @@ def _grade_all(
             strict_incomplete=config.resolved_thinking(bench).strict_incomplete,
         )
         log.info("graded %s: %d items", bench.name, len(outcomes[bench.name]))
-    (store.path.parent / "outcomes.json").write_text(
-        json.dumps({k: [asdict(o) for o in v] for k, v in outcomes.items()}, indent=2)
-    )
+        # Written per benchmark, not once at the end: judging is the last
+        # GPU-adjacent phase, and a crash here must not discard the work of
+        # the benchmarks that already graded.
+        outcome_path.write_text(
+            json.dumps({k: [asdict(o) for o in v] for k, v in outcomes.items()}, indent=2)
+        )
     return outcomes
 
 
@@ -236,6 +248,17 @@ def _score(
                 f"{bench.name}: extraction fail rate {fail_rate:.1%} exceeds the configured "
                 f"{config.max_extraction_fail_rate:.1%} -- this is a harness bug, not a model "
                 "result; inspect outcomes.json before publishing anything from this run"
+            )
+        # The same gate on the judge side: a rubric benchmark whose repeats went
+        # missing systematically has a broken instrument, and zero-filled scores
+        # must not be publishable as a model result.
+        expected = len(rows) * width
+        missing_rate = missing / expected if expected else 0.0
+        if not is_mcqa and missing_rate > config.max_extraction_fail_rate:
+            raise RuntimeError(
+                f"{bench.name}: {missing_rate:.1%} of repeats missing (judge failures) "
+                f"exceeds the configured {config.max_extraction_fail_rate:.1%} -- the judge "
+                "is systematically unparseable, which is a harness bug, not a model result"
             )
         results[bench.name] = EvalResult(
             benchmark=bench.name,

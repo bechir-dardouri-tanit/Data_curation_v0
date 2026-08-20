@@ -153,6 +153,37 @@ def test_grade_benchmark_rubric_with_deterministic_judge() -> None:
     assert think_completion_rate(outcomes) == 1.0
 
 
+def test_grade_benchmark_contains_judge_failure_to_a_missing_repeat() -> None:
+    """A sporadic unparseable verdict must cost one repeat, not the whole run."""
+    from medrl.eval.scorers.judge import JudgeError
+
+    class _FlakyJudge(DeterministicJudge):
+        failures_left = 1
+
+        def grade(self, messages, criteria):  # type: ignore[override]
+            if _FlakyJudge.failures_left > 0:
+                _FlakyJudge.failures_left -= 1
+                raise JudgeError("judge output unparseable after retry: 'thinking...'")
+            return super().grade(messages, criteria)
+
+    item = EvalItem(
+        benchmark="hb", item_id="x",
+        messages=({"role": "system", "content": "s"},
+                  {"role": "user", "content": "what should I do about chest pain?"}),
+        verify=VerifySpec(
+            style=VerifyStyle.RUBRIC,
+            criteria=(Criterion(id="c1", text="+seek immediate care", weight=2.0),),
+        ),
+    )
+    records = [_record(item, "You should seek immediate care.", repeat=0),
+               _record(item, "You should seek immediate care.", repeat=1)]
+    outcomes = grade_benchmark([item], records, judge=_FlakyJudge())
+    # Repeat 0's verdict was lost to the instrument; repeat 1 survives intact.
+    assert len(outcomes[0].repeats) == 1
+    assert outcomes[0].repeats[0].score == 1.0
+    assert outcomes[0].repeats[0].repeat == 1
+
+
 def test_grade_benchmark_rubric_requires_judge() -> None:
     item = EvalItem(
         benchmark="hb", item_id="x",

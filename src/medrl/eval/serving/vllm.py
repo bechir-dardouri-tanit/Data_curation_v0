@@ -158,7 +158,10 @@ def plan_deployment(
         max_model_len=32768,
         gpu_memory_utilization=0.85,
         port=judge_port or free_port(),
-        reasoning_parser=None,
+        # Insurance on top of request-side enable_thinking=False: if a Qwen
+        # judge ever leaks a <think> block, the parser splits it out of content
+        # instead of corrupting the JSON verdict.
+        reasoning_parser="qwen3",
     )
 
     if config.serving is ServingPattern.SPLIT_GPU:
