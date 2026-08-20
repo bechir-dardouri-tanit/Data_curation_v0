@@ -34,9 +34,9 @@ def _letter_item() -> EvalItem:
     return item
 
 
-def _record(item: EvalItem, content: str | None, **kw: object) -> GenRecord:
+def _record(item: EvalItem, content: str | None, *, repeat: int = 0, **kw: object) -> GenRecord:
     return GenRecord(
-        benchmark=item.benchmark, item_id=item.item_id, repeat=0,
+        benchmark=item.benchmark, item_id=item.item_id, repeat=repeat,
         content=content, reasoning=None, finish_reason="stop",
         prompt_tokens=10, completion_tokens=20, **kw,
     )
@@ -180,6 +180,39 @@ def test_store_roundtrip_and_resume(tmp_path) -> None:
     assert records[0].content == "Answer: B"
 
 
+def test_store_skips_errored_and_torn_lines(tmp_path) -> None:
+    # Resume must treat errored records as incomplete (they regenerate, so a
+    # transient server failure cannot permanently zero an item) and survive a
+    # torn final line (the signature of a killed run) without crashing.
+    item = _letter_item()
+    path = tmp_path / "c.jsonl"
+    store = CompletionStore(path)
+    store.write(_record(item, "Answer: B"))
+    store.write(_record(item, None, error="APIError: boom", repeat=1))
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"benchmark": "medqa", "item_i')  # torn write
+
+    reopened = CompletionStore(path)
+    assert reopened.has("medqa", item.item_id, 0)  # usable record: resume-complete
+    assert not reopened.has("medqa", item.item_id, 1)  # errored: must regenerate
+
+
+def test_thinking_knobs_travel_in_extra_body(tmp_path) -> None:
+    # Regression (adversarial review, confirmed): the vLLM knobs splatted as
+    # top-level kwargs raise TypeError against the SDK's closed create()
+    # signature -- client-side, before any request, swallowed by the retry loop.
+    item = _letter_item()
+    client = _FakeClient()
+    generate_all(
+        client, "m", [item],
+        SamplingConfig(n_repeats=1), ThinkingConfig(mode=ThinkingMode.OFF, think_budget=0),
+        CompletionStore(tmp_path / "c.jsonl"),
+    )
+    call = client.calls[0]
+    assert call["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert "chat_template_kwargs" not in call
+
+
 def test_seeds_are_process_and_order_independent() -> None:
     a = _seed_for("medqa", "q1", 0, 7)
     b = _seed_for("medqa", "q1", 0, 7)
@@ -242,8 +275,28 @@ class _FakeClient:
     def completions(self) -> _FakeClient:
         return self
 
-    def create(self, **kwargs: object) -> _FakeResponse:
-        self.calls.append(kwargs)  # type: ignore[arg-type]
+    def create(
+        self,
+        *,
+        model: str,
+        messages: list[dict],
+        temperature: float,
+        top_p: float | None = None,
+        max_tokens: int,
+        seed: int,
+        timeout: float,
+        extra_body: dict | None = None,
+    ) -> _FakeResponse:
+        # Closed signature on purpose: the real openai SDK has no **kwargs, so any
+        # vLLM knob passed top-level (instead of via extra_body) raises TypeError
+        # before a request is ever sent. This fake must fail the same way.
+        self.calls.append(
+            {
+                "model": model, "messages": messages, "temperature": temperature,
+                "top_p": top_p, "max_tokens": max_tokens, "seed": seed,
+                "timeout": timeout, "extra_body": extra_body,
+            }
+        )
         return _FakeResponse("Answer: B")
 
 

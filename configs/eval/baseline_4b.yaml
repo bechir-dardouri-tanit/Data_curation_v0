@@ -1,0 +1,11 @@
+# Baseline: untouched Qwen3.5-4B, thinking ON -- the small sibling that doubles as the
+# ablation proxy in later phases, so its untouched starting point must be on record.
+model:
+  hf_id: Qwen/Qwen3.5-4B
+  text_only: true
+cluster: local_2xh100
+sampling: {temperature: 0.6, top_p: 0.95, top_k: 40, n_repeats: 8, seed: 0, max_tokens: 10240}
+thinking: {mode: "on", think_budget: 8192, answer_budget: 2048}
+serving: sequential
+judge: fast
+benchmarks: [medqa, medmcqa, mmlu_pro_health, medxpertqa_text, medcalc, mediqal, healthbench_hard, frenchmedmcqa]

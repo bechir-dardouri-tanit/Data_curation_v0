@@ -1,0 +1,18 @@
+# End-to-end proof of the whole loop (serve -> generate -> grade -> score -> records)
+# before any long baseline run. Small limits, two repeats so the repeatability signal
+# exists, no judge (MCQA only).
+#
+# Serves the hub checkpoint with --language-model-only: vLLM's Qwen3_5ForCausalLM
+# expects flattened model.* keys, while the converted text-only checkpoint keeps the
+# transformers-native model.language_model.* nesting -- that one is the training-side
+# artifact, not a serving one.
+model:
+  hf_id: Qwen/Qwen3.5-9B
+  text_only: true
+cluster: local_2xh100
+sampling: {temperature: 0.6, top_p: 0.95, top_k: 40, n_repeats: 2, seed: 0, max_tokens: 8192}
+thinking: {mode: "on", think_budget: 3072, answer_budget: 1024}
+serving: sequential
+benchmarks:
+  - {name: medqa, loader: medqa, limit: 12}
+  - {name: medmcqa, loader: medmcqa, limit: 12}

@@ -164,3 +164,22 @@ def test_render_is_executable_shell_ordering(eval_config: EvalConfig) -> None:
     text = plan_deployment(eval_config, policy_port=8100, judge_port=8101).render()
     assert text.index("phase 1: policy") < text.index("phase 2: judge")
     assert "vllm serve" in text
+
+
+def test_env_puts_interpreters_bin_dir_on_path(eval_config: EvalConfig) -> None:
+    # Regression: `vllm` is executed bare, so it resolves through the child's PATH.
+    # A medrl launched from a non-activated venv (uv run, absolute path) must still
+    # find its own vllm -- and sys.executable must NOT be resolved, because uv
+    # interpreters are symlinks into /usr/bin and resolving escapes the venv.
+    import os
+    import sys
+    from pathlib import Path
+
+    policy = plan_deployment(eval_config, policy_port=8100).policy
+    env = policy.env()
+    bin_dir = Path(sys.executable).parent
+    if (bin_dir / "vllm").exists():  # vllm installed next to the test interpreter
+        assert env["PATH"].split(os.pathsep)[0] == str(bin_dir)
+    else:  # CPU CI without vllm: nothing to prepend, placement still present
+        assert "PATH" not in env
+    assert env["CUDA_VISIBLE_DEVICES"] == ",".join(map(str, policy.gpu_ids))

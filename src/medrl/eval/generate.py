@@ -69,12 +69,25 @@ class CompletionStore:
         self._lock = threading.Lock()
         self._keys: set[tuple[str, str, int]] = set()
         if self.path.exists():
+            torn = 0
             with self.path.open(encoding="utf-8") as fh:
                 for line in fh:
                     if not line.strip():
                         continue
-                    rec = json.loads(line)
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        # A torn final line is the signature of a killed run; skip it
+                        # (it regenerates) but count it so silence is not assumed.
+                        torn += 1
+                        continue
+                    if rec.get("error") and rec.get("content") is None:
+                        # An errored record is NOT resume-complete: transient server
+                        # failures must regenerate instead of permanently scoring 0.
+                        continue
                     self._keys.add((rec["benchmark"], rec["item_id"], rec["repeat"]))
+            if torn:
+                log.warning("resuming: skipped %d torn lines in %s", torn, self.path)
             log.info("resuming: %d completions already in %s", len(self._keys), self.path)
 
     def has(self, benchmark: str, item_id: str, repeat: int) -> bool:
@@ -181,8 +194,12 @@ def _one(
         "max_tokens": thinking.total_budget,
         "seed": _seed_for(item.benchmark, item.item_id, repeat, sampling.seed),
         "timeout": _REQUEST_TIMEOUT_S,
-        **extra,
     }
+    if extra:
+        # vLLM-specific knobs travel in the request *body*, not as SDK parameters:
+        # openai's create() has a closed signature and would raise TypeError before
+        # any request is sent -- a failure the retry loop would happily swallow.
+        kwargs["extra_body"] = extra
     t0 = time.monotonic()
     error: str | None = None
     response: Any = None

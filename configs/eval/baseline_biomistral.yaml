@@ -1,0 +1,16 @@
+# Baseline: BioMistral-7B -- the French medical anchor. A Mistral-v0.1 continuation
+# with no thinking template and weak instruction tuning, so:
+#   - thinking is OFF and the answer budget is the only budget;
+#   - the extraction gate is loosened to 20%: a base-ish model breaking the answer
+#     contract is an honest finding to report, not a reason to abort the run;
+#   - the constrained re-ask carries what it can.
+model:
+  hf_id: BioMistral/BioMistral-7B
+  dtype: bfloat16
+cluster: local_2xh100
+sampling: {temperature: 0.7, top_p: 0.8, top_k: 40, n_repeats: 8, seed: 0, max_tokens: 2048}
+thinking: {mode: "off", think_budget: 0, answer_budget: 2048}
+serving: sequential
+max_extraction_fail_rate: 0.2
+judge: fast
+benchmarks: [medqa, medmcqa, mmlu_pro_health, medxpertqa_text, medcalc, mediqal, healthbench_hard, frenchmedmcqa]

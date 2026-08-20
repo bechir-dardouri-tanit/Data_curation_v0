@@ -18,7 +18,10 @@ Three patterns, in order of preference:
 
 from __future__ import annotations
 
+import os
 import socket
+import sys
+from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -78,8 +81,19 @@ class ServePhase(BaseModel):
     def env(self) -> dict[str, str]:
         """GPU placement for the subprocess. This is the *only* placement mechanism:
         ``command()`` deliberately emits no device-selection flag, so a runner applying
-        both could not double-restrict an already-visible set."""
-        return {"CUDA_VISIBLE_DEVICES": ",".join(map(str, self.gpu_ids))}
+        both could not double-restrict an already-visible set.
+
+        Also puts the interpreter's own bin dir on PATH: ``command()`` names ``vllm``
+        bare, and a medrl launched from a non-activated venv would otherwise resolve
+        it from the system PATH (or not at all).
+        """
+        env = {"CUDA_VISIBLE_DEVICES": ",".join(map(str, self.gpu_ids))}
+        # No .resolve() here: uv-managed interpreters are symlinks, and resolving one
+        # escapes the venv's bin dir -- exactly the place `vllm` lives.
+        bin_dir = Path(sys.executable).parent
+        if (bin_dir / "vllm").exists():
+            env["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        return env
 
 
 class DeploymentPlan(BaseModel):
