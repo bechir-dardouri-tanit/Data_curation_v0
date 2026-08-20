@@ -89,10 +89,13 @@ def convert(
 
     out_path = Path(output) if output else checkpoints_dir() / f"{Path(source).name}-text"
 
+    # revision is Optional in our config but str-typed in transformers' signature;
+    # "main" is what from_pretrained resolves to when no revision is given.
+    rev = revision or "main"
     reference = Qwen3_5ForConditionalGeneration.from_pretrained(
-        source, revision=revision, torch_dtype=dtype, device_map="cpu"
+        source, revision=rev, torch_dtype=dtype, device_map="cpu"
     )
-    tokenizer = AutoTokenizer.from_pretrained(source, revision=revision)
+    tokenizer = AutoTokenizer.from_pretrained(source, revision=rev)
 
     # Archive MTP before it is dropped: it is usable for speculative decoding later.
     mtp_state = {k: v for k, v in reference.state_dict().items() if k.startswith("mtp.")}
@@ -107,7 +110,7 @@ def convert(
     # The class-level ignore patterns drop visual/mtp on load; the language model comes
     # through the prefix remap. Verification below is what makes that trustworthy.
     text_model = Qwen3_5ForCausalLM.from_pretrained(
-        source, revision=revision, torch_dtype=dtype, device_map="cpu"
+        source, revision=rev, torch_dtype=dtype, device_map="cpu"
     )
     text_model.config.architectures = ["Qwen3_5ForCausalLM"]
 

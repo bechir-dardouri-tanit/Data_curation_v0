@@ -35,9 +35,17 @@ def score_conversation(
 
 
 def _fold(verdicts: Sequence[CriterionVerdict], *, flip_count: int = 0) -> RubricScore:
-    total_weight = sum(v.weight for v in verdicts)
-    met_weight = sum(v.weight for v in verdicts if v.met)
-    fraction = met_weight / total_weight if total_weight > 0 else 0.0
+    """Fold verdicts with HealthBench's signed-points semantics.
+
+    The denominator is the sum of *positive* weights; the numerator adds the weights of
+    met criteria -- negative penalties subtract -- and is clamped to ``[0, denominator]``
+    so a response that trips many penalties cannot score below zero and drag the macro
+    mean down twice. With an all-positive rubric this reduces to the plain met-fraction.
+    """
+    denominator = sum(v.weight for v in verdicts if v.weight > 0)
+    numerator = sum(v.weight for v in verdicts if v.met)
+    numerator = min(max(numerator, 0.0), denominator)
+    fraction = numerator / denominator if denominator > 0 else 0.0
     return RubricScore(
         met_fraction=fraction,
         verdicts=tuple(verdicts),

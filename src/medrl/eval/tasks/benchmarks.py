@@ -44,31 +44,32 @@ register_task(TaskSpec(
 ))
 register_task(TaskSpec(
     name="medxpertqa_text", loader="medxpertqa", grade=Grade.DECISION, language=Language.EN,
-    hf_id="TsinghuaC3I/MedXpertQA", split="test",
+    hf_id="TsinghuaC3I/MedXpertQA", subset="Text", split="test",
     notes="Hard, unsaturated; NO train split -- never trained on", **_mcqa_kw(),
 ))
 
 # ---- decision-grade French ------------------------------------------------------------
 register_task(TaskSpec(
     name="mediqal", loader="mediqal", grade=Grade.DECISION, language=Language.FR,
-    hf_id="ANR-MALADES/MediQAl", split="test",
-    notes="French MCQ/OE; the FR decision benchmark", **_mcqa_kw(),
+    hf_id="ANR-MALADES/MediQAl", subset="mcqm", split="test",
+    notes="French MCQ; multi-answer rows are dropped (counted in load_audit)", **_mcqa_kw(),
 ))
 register_task(TaskSpec(
     name="frenchmedmcqa", loader="frenchmedmcqa", grade=Grade.REPORTING, language=Language.FR,
-    hf_id="qanastek/frenchmedmcqa", split="test", notes="Pharmacy MCQ; saturated", **_mcqa_kw(),
+    hf_id="qanastek/frenchmedmcqa", split="test",
+    notes="Pharmacy MCQ, script dataset -- read from the zip directly", **_mcqa_kw(),
 ))
 
 # ---- rubric-graded --------------------------------------------------------------------
 register_task(TaskSpec(
     name="healthbench_hard", loader="healthbench", grade=Grade.DECISION,
-    language=Language.EN, hf_id="stanfordovalabs/HealthBench-Hard", split="test",
+    language=Language.EN, hf_id="openai/healthbench", subset="hard", split="test",
     prompt_style=PromptStyle.OPEN_RUBRIC, verify_style=VerifyStyle.RUBRIC,
-    requires_judge=True, notes="Rubric %; judge tier determines comparability",
+    requires_judge=True, notes="1000 hardest conversations; judge tier determines comparability",
 ))
 register_task(TaskSpec(
     name="healthbench", loader="healthbench", grade=Grade.REPORTING,
-    language=Language.EN, hf_id="stanfordovalabs/HealthBench", split="test",
+    language=Language.EN, hf_id="openai/healthbench", split="test",
     prompt_style=PromptStyle.OPEN_RUBRIC, verify_style=VerifyStyle.RUBRIC,
     requires_judge=True,
 ))

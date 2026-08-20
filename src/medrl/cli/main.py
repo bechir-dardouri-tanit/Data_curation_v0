@@ -15,7 +15,7 @@ from rich.console import Console
 from rich.table import Table
 
 from medrl import __version__
-from medrl.core.config import Grade
+from medrl.core.config import EvalConfig, Grade
 from medrl.core.logging import setup_logging
 
 app = typer.Typer(
@@ -96,10 +96,37 @@ def eval_plan(
     console.print(f"[bold]config[/] {cfg.fingerprint}  ({len(cfg.benchmarks)} benchmarks)")
     console.print(plan.render())
     if not dry_run:  # pragma: no cover - runtime path needs vLLM
-        from medrl.eval.runner import run_eval
+        _run_eval(cfg)
 
-        results = run_eval(cfg)
-        console.print_json(json.dumps(results, default=str))
+
+@eval_app.command("run")
+def eval_run(
+    config: Annotated[str, typer.Option("--config", "-c", help="Hydra/YAML eval config path or preset.")] = "decision_grade",
+    fresh: Annotated[bool, typer.Option("--fresh", help="Ignore completions already on disk.")] = False,
+) -> None:
+    """Run the eval end to end (policy generation, judging, scoring)."""
+    from medrl.eval.config_loader import load_eval_config
+
+    _run_eval(load_eval_config(config), resume=not fresh)
+
+
+def _run_eval(cfg: EvalConfig, *, resume: bool = True) -> None:
+    from dataclasses import asdict
+
+    from medrl.eval.runner import run_eval
+
+    results = run_eval(cfg, resume=resume)
+    table = Table(title=f"results ({len(results)})")
+    for col in ("benchmark", "points", "95% ci", "mde", "n", "reps", "extr.fail", "think.ok"):
+        table.add_column(col)
+    for name, r in results.items():
+        table.add_row(
+            name, f"{r.points:.1f}", f"[{r.ci_low:.1f}, {r.ci_high:.1f}]", f"{r.mde_points:.1f}",
+            str(r.n_items), str(r.n_repeats), f"{r.extraction_fail_rate:.1%}",
+            f"{r.think_completion_rate:.1%}",
+        )
+    console.print(table)
+    console.print_json(json.dumps({k: asdict(v) for k, v in results.items()}))
 
 
 @model_app.command("convert")

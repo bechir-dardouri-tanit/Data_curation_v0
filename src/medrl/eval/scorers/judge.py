@@ -30,15 +30,20 @@ class JudgeError(RuntimeError):
 
 @dataclass(frozen=True)
 class Criterion:
-    """One binary rubric criterion."""
+    """One binary rubric criterion.
+
+    ``weight`` is signed HealthBench semantics: positive criteria pay when met, negative
+    criteria (harmful-response penalties) *subtract* when met. Zero is rejected -- a
+    criterion that cannot change a score is a rubric bug, not a neutral entry.
+    """
 
     id: str
     text: str
     weight: float = 1.0
 
     def __post_init__(self) -> None:
-        if self.weight < 0:
-            raise ValueError(f"criterion {self.id!r} weight must be >= 0, got {self.weight}")
+        if self.weight == 0:
+            raise ValueError(f"criterion {self.id!r} weight must be nonzero")
 
 
 @dataclass(frozen=True)

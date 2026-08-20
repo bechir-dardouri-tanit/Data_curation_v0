@@ -42,11 +42,14 @@ def test_eval_plan_fast_preset() -> None:
     assert "split_gpu" in out.stdout.replace("-", "_")
 
 
-def test_convert_fails_cleanly_without_train_stack() -> None:
-    out = medrl("model", "convert")
-    # torch is absent on the CPU box: the guard must exit 2 with guidance, not traceback.
-    assert out.returncode == 2, out.stderr
-    assert "train" in (out.stdout + out.stderr)
+def test_convert_help_documents_contract() -> None:
+    # The conversion itself moves ~19 GB and is a GPU-host operation (covered by
+    # test_surgery's stubbed equivalence tests); the CLI contract worth pinning here
+    # is that the command exists, documents itself, and defaults to the 9B.
+    out = medrl("model", "convert", "--help")
+    assert out.returncode == 0, out.stderr
+    assert "--verify-logits" in out.stdout
+    assert "Qwen/Qwen3.5-9B" in out.stdout
 
 
 def test_probe_help_present() -> None:
