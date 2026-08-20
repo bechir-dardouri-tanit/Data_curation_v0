@@ -61,7 +61,7 @@ class ItemOutcome:
         return [r.score for r in self.repeats]
 
 
-def grade_letter(item: EvalItem, record: GenRecord) -> RepeatOutcome:
+def grade_letter(item: EvalItem, record: GenRecord, *, strict_incomplete: bool = True) -> RepeatOutcome:
     verify = item.verify
     result = extract_mcqa(record.content or "", verify.letters)
     rescued = False
@@ -73,16 +73,22 @@ def grade_letter(item: EvalItem, record: GenRecord) -> RepeatOutcome:
         if retry.path is ExtractionPath.CONTRACT:
             result = retry
             rescued = True
+    think_completed = bool(record.content)
     correct = (
         result.path is not ExtractionPath.FAILED
         and verify_letter(result.value, verify.gold_letter or "", verify.letters)
     )
+    if strict_incomplete and not think_completed:
+        # The reasoning chain never closed (or the request failed): a constrained
+        # re-ask may still recover a *letter*, but a truncated chain has not earned
+        # credit for it. The rescue stays visible via `rescued` either way.
+        correct = False
     return RepeatOutcome(
         repeat=record.repeat,
         score=1.0 if correct else 0.0,
         extraction_path=result.path.value,
         rescued=rescued,
-        think_completed=bool(record.content),
+        think_completed=think_completed,
     )
 
 
@@ -190,9 +196,16 @@ def grade_benchmark(
     judge: Judge | None = None,
     judge_n_consistency: int = 1,
     judge_position_swap: bool = True,
+    strict_incomplete: bool = True,
     max_workers: int = 32,
 ) -> list[ItemOutcome]:
-    """Grade all records for one benchmark; rubric items fan out across threads."""
+    """Grade all records for one benchmark; rubric items fan out across threads.
+
+    ``records`` must already be collapsed to one per (item, repeat) --
+    :meth:`CompletionStore.read_all` does that. ``strict_incomplete`` implements the
+    ThinkingConfig field of the same name: a repeat whose reasoning never closed
+    scores 0 even when the constrained re-ask recovered a well-formed letter.
+    """
     by_item: dict[str, list[GenRecord]] = {}
     for record in records:
         by_item.setdefault(record.item_id, []).append(record)
@@ -207,7 +220,7 @@ def grade_benchmark(
             if record.error and not record.content:
                 log.warning("%s/%s repeat %d has error %s; scoring 0", item.benchmark, item.item_id, record.repeat, record.error[:80])
             if item.verify.style is VerifyStyle.LETTER:
-                outcome.repeats.append(grade_letter(item, record))
+                outcome.repeats.append(grade_letter(item, record, strict_incomplete=strict_incomplete))
             elif item.verify.style is VerifyStyle.NUMBER:
                 outcome.repeats.append(grade_number(item, record))
             elif item.verify.style is VerifyStyle.RUBRIC:
@@ -247,6 +260,13 @@ def extraction_fail_rate(outcomes: list[ItemOutcome]) -> float:
 
 
 def think_completion_rate(outcomes: list[ItemOutcome]) -> float:
+    """Fraction of repeats that produced final content.
+
+    With the reasoning parser active (it always is for the policy server), content is
+    empty exactly when the model never closed ``</think>`` (or the request failed), so
+    this is the truncation/failure rate. For non-thinking runs it degenerates to the
+    non-empty-response rate.
+    """
     repeats = [r for o in outcomes for r in o.repeats]
     if not repeats:
         return 0.0

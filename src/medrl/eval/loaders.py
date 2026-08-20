@@ -23,10 +23,11 @@ import io
 import json
 import zipfile
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from medrl.core.hashing import hash_obj
 from medrl.core.logging import get_logger
 from medrl.eval.extraction import normalize_letter
 from medrl.eval.items import EvalItem, VerifySpec
@@ -306,7 +307,7 @@ def _hf_rows(spec: TaskSpec, *, config_name: str | None) -> Iterator[Row]:
     except ImportError as exc:  # pragma: no cover - exercised only on slim hosts
         raise LoaderError("the `datasets` package is required: uv pip install -e '.[eval]'") from exc
     try:
-        ds = load_dataset(spec.hf_id, config_name, split=spec.split)
+        ds = load_dataset(spec.hf_id, config_name, split=spec.split, revision=spec.revision)
     except Exception as exc:
         if _is_gated(exc):
             raise GatedDatasetError(
@@ -343,13 +344,17 @@ def _glob_match(name: str, pattern: str) -> bool:
 
 def _healthbench_rows(spec: TaskSpec) -> Iterator[Row]:
     # HealthBench publishes versioned jsonl files whose names change; resolve by prefix
-    # and refuse ambiguity rather than silently grading a different mix.
+    # and refuse ambiguity rather than silently grading a different mix. The resolved
+    # filename rides on every row as ``_source_file`` so load_items can record which
+    # version actually fed the run.
     pattern = "hard_*.jsonl" if spec.subset == "hard" else "*oss_eval.jsonl"
     (path,) = _downloaded_files(spec, pattern)
     with Path(path).open(encoding="utf-8") as fh:
         for line in fh:
             if line.strip():
-                yield dict(json.loads(line))
+                row = dict(json.loads(line))
+                row["_source_file"] = Path(path).name
+                yield row
 
 
 def _frenchmedmcqa_rows(spec: TaskSpec) -> Iterator[Row]:
@@ -398,6 +403,11 @@ def load_items(spec: TaskSpec) -> LoadResult:
 
     The limit applies *after* dropping so ``limit: 100`` always means "100 evaluated
     items", never "the first 100 rows of which some number survive".
+
+    The meta dict carries the run's data provenance: the pinned revision (if any),
+    a fingerprint of the *evaluated* items (ids + prompts + verify specs), and for
+    file-resolved datasets the source filename. Two arms whose fingerprints differ
+    did not grade the same items, whatever their configs say.
     """
     result = LoadResult()
     fetch = _FETCHERS.get(spec.loader)
@@ -406,14 +416,27 @@ def load_items(spec: TaskSpec) -> LoadResult:
         raise LoaderError(f"no loader registered for {spec.loader!r} (task {spec.name})")
 
     n_rows = 0
+    source_file: str | None = None
     for row in fetch(spec):
+        if source_file is None and "_source_file" in row:
+            source_file = str(row.pop("_source_file"))
         n_rows += 1
         item = mapper(spec, row, result)
         if item is not None:
             result.items.append(item)
         if spec.limit is not None and len(result.items) >= spec.limit:
             break
-    result.meta = {"rows_seen": n_rows, "n_items": len(result.items), "prompt_style": spec.prompt_style.value}
+    result.meta = {
+        "rows_seen": n_rows,
+        "n_items": len(result.items),
+        "prompt_style": spec.prompt_style.value,
+        "revision": spec.revision,
+        "items_sha256": hash_obj(
+            [{"id": it.item_id, "messages": it.messages, "verify": asdict(it.verify)} for it in result.items]
+        ),
+    }
+    if source_file:
+        result.meta["source_file"] = source_file
     if not result.items:
         raise LoaderError(
             f"{spec.name}: no usable items from {spec.hf_id} (drops={result.drops}); "

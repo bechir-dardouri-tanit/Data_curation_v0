@@ -51,6 +51,10 @@ class EvalResult:
     ci_high: float
     n_items: int
     n_repeats: int
+    # (item, repeat) cells that never produced a completion and were scored 0.
+    # Zero unless the run is complete; a non-zero value means `points` is biased
+    # down and the run is not publishable as-is.
+    repeats_missing: int
     extraction_fail_rate: float
     think_completion_rate: float
     mde_points: float
@@ -123,7 +127,8 @@ def _execute(
     (run_dir / "load_audit.json").write_text(json.dumps(load_audit, indent=2))
 
     # ---- policy phase ----------------------------------------------------------------
-    store = CompletionStore(run_dir / "completions.jsonl")
+    # `resume=False` is the CLI's --fresh: regenerate everything, discard the store.
+    store = CompletionStore(run_dir / "completions.jsonl", fresh=not resume)
     from openai import OpenAI
 
     with VLMMServer(plan.policy, run_dir=run_dir) as server:
@@ -184,6 +189,7 @@ def _grade_all(
             judge=judge,
             judge_n_consistency=jc.n_consistency if jc else 1,
             judge_position_swap=jc.position_swap if jc else True,
+            strict_incomplete=config.resolved_thinking(bench).strict_incomplete,
         )
         log.info("graded %s: %d items", bench.name, len(outcomes[bench.name]))
     (store.path.parent / "outcomes.json").write_text(
@@ -207,10 +213,14 @@ def _score(
             continue
         width = config.resolved_sampling(bench).n_repeats
         matrix = np.zeros((len(rows), width))
+        missing = 0
         for i, scores in enumerate(rows):
             if len(scores) != width:
                 # Missing repeats score 0 -- visible, not silent, because a run that
                 # lost completions mid-flight must not read as a model regression.
+                # The count also lands in results.json (repeats_missing) so the
+                # experiment record can never misstate a partial run as complete.
+                missing += width - len(scores)
                 log.warning(
                     "%s/%s: %d of %d repeats present; absent ones score 0",
                     bench.name, bench_outcomes[i].item_id, len(scores), width,
@@ -234,6 +244,7 @@ def _score(
             ci_high=score.ci.high * 100.0,
             n_items=score.n_items,
             n_repeats=score.n_repeats,
+            repeats_missing=missing,
             extraction_fail_rate=round(fail_rate, 4),
             think_completion_rate=round(think_rate, 4),
             mde_points=score.mde_points,

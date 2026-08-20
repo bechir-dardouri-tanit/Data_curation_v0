@@ -285,3 +285,34 @@ def test_malformed_rows_fail_loudly_not_silently() -> None:
                        "data": {**MEDQA_ROW["data"], "Correct Option": "Z"}})
     with pytest.raises(LoaderError, match="no id"):
         _map("medqa", {**MEDQA_ROW, "id": None})
+
+
+# ------------------------------------------------------------------ load_items meta
+def test_load_items_fingerprints_evaluated_subset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provenance: the audit must pin what was actually graded, not what was asked for."""
+    from medrl.eval import loaders
+
+    spec = TASKS.get("medqa").with_overrides(limit=1)
+    monkeypatch.setattr(
+        loaders, "_FETCHERS",
+        {"medqa": lambda s: iter([dict(MEDQA_ROW), dict(MEDQA_ROW)])},
+    )
+    result = loaders.load_items(spec)
+    assert result.meta["n_items"] == 1  # limit applied after mapping
+    assert result.meta["rows_seen"] == 1  # fetch stops at the limit
+    assert len(result.meta["items_sha256"]) == 16
+    assert result.meta["revision"] is None  # unpinned: recorded as such
+
+
+def test_load_items_fingerprint_tracks_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    from medrl.eval import loaders
+
+    spec = TASKS.get("medqa")
+    monkeypatch.setattr(loaders, "_FETCHERS", {"medqa": lambda s: iter([dict(MEDQA_ROW)])})
+    a = loaders.load_items(spec).meta["items_sha256"]
+
+    changed = dict(MEDQA_ROW)
+    changed["data"] = {**changed["data"], "Correct Option": "C"}
+    monkeypatch.setattr(loaders, "_FETCHERS", {"medqa": lambda s: iter([changed])})
+    b = loaders.load_items(spec).meta["items_sha256"]
+    assert a != b  # same id, different gold: different fingerprint

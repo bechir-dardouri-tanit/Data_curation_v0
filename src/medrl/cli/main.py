@@ -114,16 +114,20 @@ def _run_eval(cfg: EvalConfig, *, resume: bool = True) -> None:
     from dataclasses import asdict
 
     from medrl.eval.runner import run_eval
+    from medrl.eval.tasks.benchmarks import TASKS
+    from medrl.eval.tasks.spec import VerifyStyle
 
     results = run_eval(cfg, resume=resume)
     table = Table(title=f"results ({len(results)})")
     for col in ("benchmark", "points", "95% ci", "mde", "n", "reps", "extr.fail", "think.ok"):
         table.add_column(col)
     for name, r in results.items():
+        reps = str(r.n_repeats) if not r.repeats_missing else f"{r.n_repeats}(-{r.repeats_missing})"
+        # 0.0 would read as "clean" on benchmarks where the rate is not measured.
+        extr = f"{r.extraction_fail_rate:.1%}" if TASKS.get(name).verify_style is VerifyStyle.LETTER else "-"
         table.add_row(
             name, f"{r.points:.1f}", f"[{r.ci_low:.1f}, {r.ci_high:.1f}]", f"{r.mde_points:.1f}",
-            str(r.n_items), str(r.n_repeats), f"{r.extraction_fail_rate:.1%}",
-            f"{r.think_completion_rate:.1%}",
+            str(r.n_items), reps, extr, f"{r.think_completion_rate:.1%}",
         )
     console.print(table)
     console.print_json(json.dumps({k: asdict(v) for k, v in results.items()}))

@@ -61,34 +61,45 @@ class GenRecord:
 
 
 class CompletionStore:
-    """Append-only JSONL with an in-memory key index for resume."""
+    """Append-only JSONL with an in-memory key index for resume.
 
-    def __init__(self, path: Path):
+    Invariants, shared with :meth:`read_all`:
+
+    - An *errored* record (``error`` set, no content) is not resume-complete: a
+      transient failure regenerates rather than permanently scoring 0.
+    - A *torn* trailing line (killed run) is skipped, not fatal.
+    - ``fresh=True`` discards the file instead of resuming it -- the semantics the
+      CLI's ``--fresh`` promises.
+    """
+
+    def __init__(self, path: Path, *, fresh: bool = False):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._keys: set[tuple[str, str, int]] = set()
         if self.path.exists():
-            torn = 0
-            with self.path.open(encoding="utf-8") as fh:
-                for line in fh:
-                    if not line.strip():
-                        continue
-                    try:
-                        rec = json.loads(line)
-                    except json.JSONDecodeError:
-                        # A torn final line is the signature of a killed run; skip it
-                        # (it regenerates) but count it so silence is not assumed.
-                        torn += 1
-                        continue
-                    if rec.get("error") and rec.get("content") is None:
-                        # An errored record is NOT resume-complete: transient server
-                        # failures must regenerate instead of permanently scoring 0.
-                        continue
-                    self._keys.add((rec["benchmark"], rec["item_id"], rec["repeat"]))
-            if torn:
-                log.warning("resuming: skipped %d torn lines in %s", torn, self.path)
-            log.info("resuming: %d completions already in %s", len(self._keys), self.path)
+            if fresh:
+                n = sum(1 for line in self.path.open(encoding="utf-8") if line.strip())
+                self.path.unlink()
+                log.info("fresh run: discarded %d existing completions in %s", n, self.path)
+            else:
+                torn = 0
+                with self.path.open(encoding="utf-8") as fh:
+                    for line in fh:
+                        if not line.strip():
+                            continue
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            torn += 1
+                            continue
+                        if rec.get("error") and rec.get("content") is None:
+                            continue
+                        self._keys.add((rec["benchmark"], rec["item_id"], rec["repeat"]))
+                if torn:
+                    log.warning("resuming: skipped %d torn lines in %s", torn, self.path)
+                log.info("resuming: %d completions already in %s", len(self._keys), self.path)
+        self.path.touch()
 
     def has(self, benchmark: str, item_id: str, repeat: int) -> bool:
         return (benchmark, item_id, repeat) in self._keys
@@ -102,12 +113,30 @@ class CompletionStore:
 
     @classmethod
     def read_all(cls, path: Path) -> list[GenRecord]:
-        records = [
-            GenRecord(**json.loads(line))
-            for line in Path(path).read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-        return records
+        """The grading view of the store: exactly one record per key.
+
+        Resume appends regenerations after the attempts they replace, so a key can
+        appear more than once (errored attempt, then its usable regeneration). The
+        last *usable* record for a key wins; a key with no usable record keeps its
+        last errored one -- grading must still see, score, and report the failure.
+        Without this collapse, a resumed run grades both the stale zero and the
+        regeneration and silently shifts repeat columns. Torn lines are skipped,
+        mirroring :meth:`CompletionStore.__init__`.
+        """
+        by_key: dict[tuple[str, str, int], GenRecord] = {}
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = GenRecord(**json.loads(line))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            key = (rec.benchmark, rec.item_id, rec.repeat)
+            if rec.content is not None or rec.error is None:
+                by_key[key] = rec  # usable: supersedes whatever came before it
+            elif key not in by_key or by_key[key].content is None:
+                by_key[key] = rec  # errored: placeholder until a usable one lands
+        return list(by_key.values())
 
 
 def _seed_for(benchmark: str, item_id: str, repeat: int, base_seed: int) -> int:
@@ -127,6 +156,10 @@ def _messages_with_thinking(
         extra["chat_template_kwargs"] = {"enable_thinking": False}
     elif thinking.prefill_think:
         messages.append({"role": "assistant", "content": _THINK_PREFILL})
+        # The pair is validated server-side: continuing the final (prefilled)
+        # message is only legal with the generation-prompt header OFF -- vLLM
+        # defaults add_generation_prompt to True and 400s on the combination.
+        extra["add_generation_prompt"] = False
         extra["continue_final_message"] = True
     return messages, extra
 

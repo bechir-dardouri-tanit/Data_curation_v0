@@ -54,6 +54,10 @@ class TaskSpec(BenchmarkConfig):
     guided_decoding: str | None = None
     pass_at_k: int = 1
     notes: str | None = None
+    # Hub revision to pin; None floats with the dataset's default branch. The
+    # resolved items are always fingerprinted into load_audit.json either way, so
+    # drift between arms is detectable even when unpinned.
+    revision: str | None = None
 
     @field_validator("letters")
     @classmethod

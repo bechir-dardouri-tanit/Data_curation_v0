@@ -349,3 +349,55 @@ def test_generate_all_fires_constrained_retry_on_bad_format(tmp_path) -> None:
     assert rec.retry_content == "Answer: B"
     outcome = grade_letter(item, rec)
     assert outcome.score == 1.0 and outcome.rescued is True
+
+
+def test_prefill_sends_the_validated_flag_pair() -> None:
+    # vLLM validates these as a pair: continuing a prefilled final message is only
+    # legal with the generation-prompt header off (its default is on -> 400).
+    item = _letter_item()
+    messages, extra = _messages_with_thinking(
+        item, ThinkingConfig(mode=ThinkingMode.ON, think_budget=64)
+    )
+    assert messages[-1] == {"role": "assistant", "content": "<think>\n"}
+    assert extra == {"add_generation_prompt": False, "continue_final_message": True}
+
+
+def test_read_all_collapses_regenerations(tmp_path) -> None:
+    # Resume appends a regeneration after the errored attempt it replaces; grading
+    # must see ONE record per key -- the usable one -- or the stale zero shifts
+    # repeat columns and biases every statistic.
+    item = _letter_item()
+    path = tmp_path / "c.jsonl"
+    store = CompletionStore(path)
+    store.write(_record(item, None, error="APIError: boom"))
+    store.write(_record(item, "Answer: B"))
+    other = _record(item, "Answer: C", repeat=1, error="APIError: still down")
+    store.write(other)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"benchmark": "medqa", "item_i')  # torn write from a kill
+
+    records = CompletionStore.read_all(path)
+    assert len(records) == 2
+    by_repeat = {r.repeat: r for r in records}
+    assert by_repeat[0].content == "Answer: B"
+    assert by_repeat[1].error == "APIError: still down"  # no usable successor: visible
+
+
+def test_fresh_store_discards_existing_completions(tmp_path) -> None:
+    item = _letter_item()
+    path = tmp_path / "c.jsonl"
+    CompletionStore(path).write(_record(item, "Answer: B"))
+    store = CompletionStore(path, fresh=True)
+    assert not store.has("medqa", item.item_id, 0)
+    assert CompletionStore.read_all(path) == []
+
+
+def test_strict_incomplete_zeroes_rescued_truncation() -> None:
+    # A reasoning chain that never closed earns no credit for the letter the
+    # constrained re-ask recovered -- unless the config explicitly relaxes it.
+    item = _letter_item()  # gold B
+    record = _record(item, "", retry_content="Answer: B")
+    strict = grade_letter(item, record, strict_incomplete=True)
+    lax = grade_letter(item, record, strict_incomplete=False)
+    assert strict.score == 0.0 and strict.rescued and not strict.think_completed
+    assert lax.score == 1.0 and lax.rescued
