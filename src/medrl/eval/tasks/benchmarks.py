@@ -51,8 +51,10 @@ register_task(TaskSpec(
 # ---- decision-grade French ------------------------------------------------------------
 register_task(TaskSpec(
     name="mediqal", loader="mediqal", grade=Grade.DECISION, language=Language.FR,
-    hf_id="ANR-MALADES/MediQAl", subset="mcqm", split="test",
-    notes="French MCQ; multi-answer rows are dropped (counted in load_audit)", **_mcqa_kw(),
+    hf_id="ANR-MALADES/MediQAl", subset="mcqu", split="test",
+    notes="French clinical MCQ, single-answer (unique) config; the sibling 'mcqm' config "
+          "is 100% multi-select and incompatible with the single-letter contract",
+    **_mcqa_kw(),
 ))
 register_task(TaskSpec(
     name="frenchmedmcqa", loader="frenchmedmcqa", grade=Grade.REPORTING, language=Language.FR,
