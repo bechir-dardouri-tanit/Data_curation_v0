@@ -30,10 +30,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from medrl.core.logging import get_logger
 from medrl.curation import store
 from medrl.curation.schema import CorpusItem, Flags, StageError, StageManifest, utcnow
 from medrl.curation.thresholds import THRESHOLDS, snapshot
-from medrl.core.logging import get_logger
 
 log = get_logger(__name__)
 
@@ -70,8 +70,8 @@ REPLACEMENT_CHAR = "�"
 
 MOJIBAKE_SEQUENCES: tuple[str, ...] = (
     # UTF-8 bytes re-decoded as Latin-1/cp1252 -- the signatures French corpora
-    # acquire through mis-decoded scrapes. All multi-byte, so legitimate French
-    # ("cafe", "age", a bare accented letter) never matches.
+    # acquire through mis-decoded scrapes. All multi-byte, so accented French
+    # words like "caf\u00e9" or "\u00e2ge" never match.
     "Ã©",  # e-acute
     "Ã¨",  # e-grave
     "Ãª",  # e-circumflex
@@ -80,7 +80,7 @@ MOJIBAKE_SEQUENCES: tuple[str, ...] = (
     "Ã\u00a0",  # a-grave (NBSP second byte kept as an escape: invisible in source)
     "Ã¢",  # a-circumflex
     "Ã®",  # i-circumflex
-    "Ã´",  # o-circumflex
+    "Ã\u00b4",  # o-circumflex (U+00B4 second byte kept as an escape: ruff RUF001-ambiguous)
     "Ã»",  # u-circumflex
     "â€™",  # right single quote
     "â€œ",  # left double quote
@@ -114,9 +114,11 @@ def _tokenizer_or_none() -> Any:
             from transformers import AutoTokenizer
 
             _loaded_tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID, local_files_only=True)
-        except Exception as exc:  # noqa: BLE001 -- any load failure means fallback
+        except Exception as exc:
             _tokenizer_unavailable = True
-            log.warning("S2 tokenizer %s unavailable (%s); %s", TOKENIZER_ID, exc, _whitespace_fallback_note)
+            log.warning(
+                "S2 tokenizer %s unavailable (%s); %s", TOKENIZER_ID, exc, _whitespace_fallback_note
+            )
     return _loaded_tokenizer
 
 
@@ -129,9 +131,9 @@ def count_tokens(text: str) -> int:
     cached -- see ``_whitespace_fallback_note`` for the bias direction.
     """
     tok = _tokenizer_or_none()
-        if tok is None:
-            return len(text.split())
-        return len(tok(text, add_special_tokens=False)["input_ids"])
+    if tok is None:
+        return len(text.split())
+    return len(tok(text, add_special_tokens=False)["input_ids"])
 
 
 def tokenizer_mode() -> str:
@@ -229,7 +231,9 @@ def _check_repetition(item: CorpusItem) -> bool:
     exist in neither text alone.
     """
     for text in (_assistant_text(item), item.thinking or ""):
-        if _has_repeated_span(text, THRESHOLDS.repetition_span_chars, THRESHOLDS.repetition_max_occurrences):
+        if _has_repeated_span(
+            text, THRESHOLDS.repetition_span_chars, THRESHOLDS.repetition_max_occurrences
+        ):
             return True
     return False
 
@@ -347,10 +351,17 @@ def stage_entry(
     id inside write_items) and accumulates the per-source flag tallies that
     become ``flag_rates``. Optional input/output dirs let tests run against
     tmp_path instead of the run's scratch layout.
+
+    A missing input snapshot is a StageError, not an empty pass: running S2
+    over a directory S1 never wrote would silently produce a zero-row
+    02_structural and overwrite a good snapshot with it.
     """
     started = utcnow()
     inp = input_dir if input_dir is not None else store.stage_dir(run_id, INPUT_STAGE)
     out = output_dir if output_dir is not None else store.stage_dir(run_id, OUTPUT_STAGE)
+    if not inp.is_dir():
+        raise StageError(f"S2: input snapshot {inp} does not exist -- run {INPUT_STAGE} first")
+    out.mkdir(parents=True, exist_ok=True)  # explicit dirs skip stage_dir's mkdir
     validate_check_registry()
 
     manifest = StageManifest(

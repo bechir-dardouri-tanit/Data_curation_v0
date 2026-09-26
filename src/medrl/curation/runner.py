@@ -63,10 +63,16 @@ def run(run_id: str, stages: list[str]) -> int:
 def register_builtin_stages() -> None:
     """Wire stage modules into STAGES. Idempotent; called by main()."""
     from medrl.curation import registry as registry_mod
-    from medrl.curation.stages import normalize
+    from medrl.curation.stages import answers, dedup_lex, decontam_ngram, decontam_sem, embed, normalize, structural
 
     STAGES.setdefault("00_registry", registry_mod.run_registry)
     STAGES.setdefault("01_normalize", normalize.stage_entry)
+    STAGES.setdefault("02_structural", structural.stage_entry)
+    STAGES.setdefault("03_dedup", dedup_lex.stage_entry)
+    STAGES.setdefault("04_decontam_ngram", decontam_ngram.stage_entry)
+    STAGES.setdefault("05_embed", embed.run_embed)
+    STAGES.setdefault("06_decontam_sem", decontam_sem.run_decontam_sem)
+    STAGES.setdefault("09_answers", answers.run_answers)
 
 
 def main(argv: list[str] | None = None) -> int:

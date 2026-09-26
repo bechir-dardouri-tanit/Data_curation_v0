@@ -41,10 +41,10 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from medrl.core.logging import get_logger
 from medrl.curation import store
 from medrl.curation.schema import CorpusItem, StageError, StageManifest, utcnow
 from medrl.curation.thresholds import THRESHOLDS, snapshot
-from medrl.core.logging import get_logger
 from medrl.data.decontam import BenchmarkIndex, BenchmarkItem, generate_negative_controls
 
 log = get_logger(__name__)
@@ -84,10 +84,10 @@ def build_question_index(benchmarks: Sequence[str]) -> BenchmarkIndex:
 
     index = BenchmarkIndex(ngram_n=THRESHOLDS.contam_ngram_n)
     for name in benchmarks:
-        spec = TASKS.get(name)
-        if spec is None:
+        if name not in TASKS:  # Registry.get raises KeyError; we raise StageError with its hint
             known = ", ".join(sorted(TASKS))
             raise StageError(f"S4: benchmark {name!r} is not in the eval registry (known: {known})")
+        spec = TASKS.get(name)
         try:
             result = load_items(spec)
         except Exception as exc:
@@ -103,7 +103,9 @@ def build_question_index(benchmarks: Sequence[str]) -> BenchmarkIndex:
     return index
 
 
-def match_question(index: BenchmarkIndex, question: str) -> tuple[bool, str | None, dict[str, float]]:
+def match_question(
+    index: BenchmarkIndex, question: str
+) -> tuple[bool, str | None, dict[str, float]]:
     """Query one question text against the index at the S4 operating point.
 
     Returns ``(hit, strongest_benchmark, per_benchmark_best_overlap)``. The
@@ -152,7 +154,9 @@ def run_canary(
 
     neg_detected: dict[str, int] = {}
     neg_total = 0
-    for control in generate_negative_controls(sampled, modifications=list(_CANARY_MODIFICATIONS), seed=seed):
+    for control in generate_negative_controls(
+        sampled, modifications=list(_CANARY_MODIFICATIONS), seed=seed
+    ):
         neg_total += 1
         detected, _, _ = match_question(index, control.text)
         if detected:
@@ -224,6 +228,11 @@ def run_decontam_ngram(
     """
     inp = input_dir if input_dir is not None else store.stage_dir(run_id, INPUT_STAGE)
     out = output_dir if output_dir is not None else store.stage_dir(run_id, STAGE_NAME)
+    # store.stage_dir mkdirs its own default; an injected (subset/test) dir must too.
+    if input_dir is not None:
+        inp.mkdir(parents=True, exist_ok=True)
+    if output_dir is not None:
+        out.mkdir(parents=True, exist_ok=True)
     names = _resolve_benchmarks(benchmarks)
     if index is None:
         index = build_question_index(names)
@@ -254,7 +263,7 @@ def run_decontam_ngram(
         "rows_in": store.count_items(inp),
         "rows_out": store.count_items(out),
         "flag_rates": rates,
-        "per_benchmark_hits": {bench: n for bench, n in sorted(per_benchmark_hits.items())},
+        "per_benchmark_hits": dict(sorted(per_benchmark_hits.items())),
         "canary": canary,
     }
 
