@@ -91,10 +91,14 @@ def fetch_hub_metadata(hf_id: str) -> dict[str, Any]:
     token = os.environ.get("HF_TOKEN")
     if token:
         headers["authorization"] = f"Bearer {token}"
-    r = httpx.get(HUB_DATASET_URL.format(hf_id=hf_id), headers=headers, timeout=30)
+    r = httpx.get(HUB_DATASET_URL.format(hf_id=hf_id), headers=headers, timeout=30,
+                  follow_redirects=True)
     r.raise_for_status()
     meta = r.json()
     return {
+        # hub may 307 to a renamed repo (GeneralThought-430K -> RJT1990/GeneralThoughtArchive);
+        # record the RESOLVED id so downstream snapshots cite what was actually read
+        "resolved_id": meta.get("id", hf_id),
         "sha": meta.get("sha"),
         "licence_tag": (meta.get("cardData") or {}).get("license")
         or (meta.get("cardData") or {}).get("licence"),
@@ -137,7 +141,7 @@ def acquire(plan: SourcePlan, out_dir: Path) -> SourceRecord:
 
     return SourceRecord(
         source_id=plan.source_id,
-        url_or_hf_id=plan.hf_id,
+        url_or_hf_id=meta.get("resolved_id", plan.hf_id),
         hf_revision=meta["sha"],
         content_sha256=fh.hexdigest(),
         n_rows=plan.expected_rows,  # replaced by the real count at S1 materialization

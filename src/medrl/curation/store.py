@@ -95,6 +95,19 @@ def _from_arrow_row(row: dict) -> CorpusItem:
     return CorpusItem.model_validate(row)
 
 
+def reset_dir(directory: Path) -> Path:
+    """Remove stage outputs (parts, ANN files) so a re-run starts clean.
+
+    Stages call this on their OUTPUT dir only -- never on an input snapshot.
+    Append-across-calls semantics of write_items apply *within* one stage run.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    for f in directory.iterdir():
+        if f.is_file() and (f.name.startswith("part-") or f.suffix in {".usearch", ".json"} and f.stem.startswith("ann")):
+            f.unlink()
+    return directory
+
+
 def write_items(items: Iterable[CorpusItem], directory: Path, max_rows_per_file: int = 50_000) -> int:
     """Write items as part files; returns count written. Sorted by id for stable hashes.
 
@@ -232,6 +245,7 @@ def read_registry(run_id: str) -> list[SourceRecord]:
 
 __all__ = [
     "EXPERIMENTS_ROOT",
+    "reset_dir",
     "SCRATCH_ROOT",
     "content_sha256",
     "count_items",

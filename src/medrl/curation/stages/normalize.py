@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from medrl.curation.registry import REGISTRY_SOURCES, iter_source_files
 from medrl.curation.schema import AnswerType, CorpusItem, StageError
-from medrl.curation.store import stage_dir, write_items
+from medrl.curation.store import reset_dir, stage_dir, write_items
 from medrl.curation.thresholds import THRESHOLDS
 
 Mapper = Callable[[str, dict[str, Any]], CorpusItem | None]
@@ -62,18 +62,27 @@ def _glotlid():
 
 
 def detect_lang(text: str) -> tuple[str, float]:
-    """(lang, score) with the GlotLID second opinion below the confidence floor."""
+    """(lang, score) with the GlotLID second opinion below the confidence floor.
+
+    Uses fastText's low-level pybind ``f.predict`` -- the convenience wrapper in
+    fasttext/FastText.py calls ``np.array(..., copy=False)``, which NumPy 2
+    removed (fasttext-wheel 0.9.2 ships the old call). The pybind signature is
+    ``predict(text, k, threshold, on_unicode_error) -> [(prob, label), ...]``.
+    """
     t = text.strip()
     if not t:
         return "en", 0.0
-    labels, probs = _lid().predict(t.replace("\n", " ")[:4000], k=1)
-    lang, score = labels[0].replace("__label__", ""), float(probs[0])
+    results = _lid().f.predict(t.replace("\n", " ")[:4000], 1, 0.0, "strict")
+    if not results:
+        return "en", 0.0
+    score, label = results[0]
+    lang, score = label.replace("__label__", ""), float(score)
     if score >= THRESHOLDS.lid_confidence_floor and len(t) >= THRESHOLDS.lid_min_chars:
         return lang, score
     try:
-        results = _glotlid().predict(t, k=1)
-        if results:
-            cand_lang, cand_score = results[0][0].replace("_Latn", ""), float(results[0][1])
+        glot = _glotlid().predict(t, k=1)
+        if glot:
+            cand_lang, cand_score = glot[0][0].replace("_Latn", ""), float(glot[0][1])
             if cand_score >= score:
                 return cand_lang, cand_score
     except Exception:  # noqa: BLE001 -- GlotLID optional; fastText result stands
@@ -161,14 +170,18 @@ def map_generalthought_biology(sid: str, row: dict[str, Any]) -> CorpusItem | No
 
 
 def map_medical_r1_distill(sid: str, row: dict[str, Any]) -> CorpusItem | None:
-    """reasoning_content + content fields (R1 distillation)."""
-    q = row.get("question") or row.get("content") or row.get("problem")
+    """R1 distillation. Verified on-disk keys carry parenthetical suffixes:
+    'reasoning (reasoning_content)' and 'response (content)'; plain names kept
+    as fallbacks in case the export format changes."""
+    q = row.get("question") or row.get("problem")
     if not q:
         return None
-    return _mk(sid, hash(str(q)[:128]),
+    response = row.get("response (content)") or row.get("content") or ""
+    reasoning = row.get("reasoning (reasoning_content)") or row.get("reasoning_content") or None
+    return _mk(sid, 0,  # id assigned by materialize_source (row position)
                messages=[{"role": "user", "content": str(q)},
-                         {"role": "assistant", "content": str(row.get("content", ""))}],
-               thinking=row.get("reasoning_content") or None,
+                         {"role": "assistant", "content": str(response)}],
+               thinking=reasoning,
                answer_type="free_text")
 
 
@@ -264,10 +277,10 @@ def _read_rows(path: Path) -> Iterator[dict[str, Any]]:
             for row in pq.read_table(f).to_pylist():
                 yield row
         return
-    opener = json.load if path.suffix == ".json" else None
-    if path.name.endswith(".json"):
-        data = opener(json.loads(path.read_text()))
-        for row in data:
+    if path.suffix == ".json":
+        data = json.loads(path.read_text())
+        rows = data if isinstance(data, list) else [data]
+        for row in rows:
             yield row
         return
     with open(path) as f:
@@ -283,18 +296,21 @@ def materialize_source(source_id: str, records: dict[str, Any]) -> Iterator[Corp
     if mapper is None:
         raise StageError(f"S1: no mapper registered for source {source_id!r}")
     record = records[source_id]
-    seen_ids: set[str] = set()
     n = 0
-    for path in iter_source_files(record):
-        for row in _read_rows(path):
+    for file_idx, path in enumerate(iter_source_files(record)):
+        for row_idx, row in enumerate(_read_rows(path)):
             try:
                 item = mapper(source_id, row)
             except Exception:
                 continue  # malformed row: counted, not fatal -- manifest reports the rate
             n += 1
-            if item is None or item.id in seen_ids:
+            if item is None:
                 continue
-            seen_ids.add(item.id)
+            # Row-position id: stable across runs (sorted files, deterministic
+            # readers). Content duplication is deliberately NOT resolved here --
+            # that is S3's job; a content hash here would silently merge
+            # distinct rows and salted hash() broke run-to-run reproducibility.
+            item = item.model_copy(update={"id": f"{source_id}:{file_idx}:{row_idx}"})
             concat = question_concat(row) if not item.messages else question_concat(
                 {"messages": item.messages, **{k: v for k, v in row.items() if isinstance(v, str)}})
             lang, score = detect_lang(concat)
@@ -310,7 +326,7 @@ def run_normalize(run_id: str, sources: list[str] | None = None) -> dict[str, An
     if not records:
         raise StageError(f"S1: no registry for run {run_id} -- run S0 first")
     wanted = sources or [s for s in REGISTRY_SOURCES if s in records]
-    out = stage_dir(run_id, "01_normalize")
+    out = reset_dir(stage_dir(run_id, "01_normalize"))
     stats: dict[str, dict[str, int]] = {}
     batch: list[CorpusItem] = []
 
@@ -339,15 +355,23 @@ def stage_entry(run_id: str, sources: list[str] | None = None):
     started = utcnow()
     result = run_normalize(run_id, sources)
     out_dir = Path(result["stage_dir"])
+    per_source = result["per_source"]
     manifest = StageManifest(
         run_id=run_id, stage="01_normalize", started_at=started,
-        config={"sources": sorted(result["per_source"])},
-        rows_in=sum(s["rows_seen"] for s in result["per_source"].values()),
+        config={"sources": sorted(per_source)},
+        rows_in=sum(s["rows_seen"] for s in per_source.values()),
         rows_out=count_items(out_dir),
         output_sha256=content_sha256(out_dir),
-        notes={"per_source": result["per_source"]},
     )
-    assert manifest.rows_in == manifest.rows_out, "flags-not-deletes: S1 never drops"
+    # S1 is the materialization boundary: mappers legitimately filter raw rows
+    # (zh Huatuo subsets, non-biology GeneralThought...). The flags-not-deletes
+    # invariant starts at S2; here every drop is counted and published instead.
+    manifest.notes = {
+        "per_source": per_source,
+        "dropped_by_mapper": {k: v["rows_seen"] - v["items_kept"] for k, v in per_source.items()},
+        "rows_out_matches_kept": manifest.rows_out
+        == sum(v["items_kept"] for v in per_source.values()),
+    }
     return manifest
 
 

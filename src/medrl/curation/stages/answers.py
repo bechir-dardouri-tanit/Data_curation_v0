@@ -91,7 +91,7 @@ def run_answers(
 ) -> StageManifest:
     started = utcnow()
     inp = store.stage_dir(run_id, input_stage)
-    out = store.stage_dir(run_id, output_stage)
+    out = store.reset_dir(store.stage_dir(run_id, output_stage))
     manifest = StageManifest(
         run_id=run_id, stage=output_stage, started_at=started,
         thresholds={"numeric_rtol": THRESHOLDS.numeric_rtol},

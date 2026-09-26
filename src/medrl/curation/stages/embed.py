@@ -94,7 +94,7 @@ def run_embed(
     """Embed every un-embedded item of the input snapshot; write snapshot + ANN index."""
     started = utcnow()
     inp = store.stage_dir(run_id, input_stage)
-    out = store.stage_dir(run_id, output_stage)
+    out = store.reset_dir(store.stage_dir(run_id, output_stage))
     manifest = StageManifest(
         run_id=run_id, stage=output_stage, started_at=started,
         config={"model": model, "base_url": base_url,
