@@ -127,6 +127,7 @@ markers = [
     "network: requires network access (Hub downloads)",
     "slow: long-running (minutes)",
 ]
+asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["src/medrl"]
