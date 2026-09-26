@@ -14,7 +14,10 @@ from collections.abc import Sequence
 MCQA_SYSTEM = (
     "You are a medical expert. Reason carefully, then give your final answer as a single "
     "line in the exact form 'Answer: <LETTER>' where <LETTER> is one of the option letters. "
-    "The response must end with that line."
+    "The response must end with that line. "
+    "Examples of correct format: 'Answer: B', 'Answer: C', 'Answer: (B)', 'Answer: [C]'. "
+    "Do NOT write: 'The answer is B' or 'I choose option B' or 'Option B is correct'. "
+    "Only use the exact format: Answer: <LETTER>."
 )
 """The terminal-line contract; mirrors the guided-decoding grammar and the CONTRACT parser."""
 
@@ -65,7 +68,13 @@ def build_mcqa_user(
         text = option[1] if isinstance(option, tuple) else option
         lines.append(f"{letter}. {text}")
     lines.append("")
-    lines.append("End with 'Answer: <LETTER>'.")
+    lines.append("Format requirements:")
+    lines.append("- Your final answer must be on its own line as 'Answer: <LETTER>'")
+    lines.append("- <LETTER> must be one of the option letters above")
+    lines.append("- Examples: Answer: A, Answer: B, Answer: C")
+    lines.append("- Do NOT use other formats like 'The answer is B' or 'I choose B'")
+    lines.append("")
+    lines.append("Your final answer:")
     return "\n".join(lines)
 
 

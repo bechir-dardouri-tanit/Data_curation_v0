@@ -21,8 +21,10 @@ Design points that matter more than they look:
 from __future__ import annotations
 
 import json
+import random
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -37,6 +39,9 @@ from medrl.eval.items import EvalItem
 log = get_logger(__name__)
 
 _REQUEST_TIMEOUT_S = 1200.0
+# Far above any healthy burst (a 55k-completion run observed zero errors);
+# reached in minutes only when the server is dead or wedged.
+_ABORT_ERROR_STREAK = 256
 _MAX_ATTEMPTS = 3
 _BACKOFF_S = (5.0, 30.0)
 _THINK_PREFILL = "<think>\n"
@@ -58,6 +63,14 @@ class GenRecord:
     retry_content: str | None = None
     elapsed_s: float | None = None
     error: str | None = None
+
+
+class GenerationAbortedError(RuntimeError):
+    """The serving process died (or stopped answering) mid-generation.
+
+    Raised as soon as the pool notices, so the failure is attributed to the
+    server -- not misread hours later as a model that failed every item.
+    """
 
 
 class CompletionStore:
@@ -124,18 +137,25 @@ class CompletionStore:
         mirroring :meth:`CompletionStore.__init__`.
         """
         by_key: dict[tuple[str, str, int], GenRecord] = {}
-        for line in Path(path).read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                rec = GenRecord(**json.loads(line))
-            except (json.JSONDecodeError, TypeError):
-                continue
-            key = (rec.benchmark, rec.item_id, rec.repeat)
-            if rec.content is not None or rec.error is None:
-                by_key[key] = rec  # usable: supersedes whatever came before it
-            elif key not in by_key or by_key[key].content is None:
-                by_key[key] = rec  # errored: placeholder until a usable one lands
+        # Streamed, not slurped: a full run's store is multi-GB of thinking
+        # text, and read_text()+splitlines() triples it in RAM right before the
+        # judge phase wants that memory for its own client pool. errors="replace"
+        # extends the torn-line tolerance to non-UTF-8 bytes a hard crash can
+        # leave behind.
+        with Path(path).open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.rstrip("\n")
+                if not line.strip():
+                    continue
+                try:
+                    rec = GenRecord(**json.loads(line))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                key = (rec.benchmark, rec.item_id, rec.repeat)
+                if rec.content is not None or rec.error is None:
+                    by_key[key] = rec  # usable: supersedes whatever came before it
+                elif key not in by_key or by_key[key].content is None:
+                    by_key[key] = rec  # errored: placeholder until a usable one lands
         return list(by_key.values())
 
 
@@ -144,11 +164,44 @@ def _seed_for(benchmark: str, item_id: str, repeat: int, base_seed: int) -> int:
     return int(digest[:8], 16) % (2**31 - 1)
 
 
+def _normalize_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Normalize messages to ensure proper user/assistant alternation.
+
+    Some chat templates are strict about requiring user/assistant alternation
+    and may not handle system messages properly. This converts system messages
+    to be part of the first user message for maximum compatibility.
+    """
+    if not messages:
+        return messages
+
+    normalized = []
+    system_content = ""
+
+    # Collect system messages
+    for msg in messages:
+        if msg["role"] == "system":
+            system_content += msg["content"] + "\n\n"
+        else:
+            normalized.append(msg)
+
+    # Prepend system content to the first user message
+    if system_content and normalized and normalized[0]["role"] == "user":
+        normalized[0] = {
+            "role": "user",
+            "content": system_content.strip() + "\n\n" + normalized[0]["content"]
+        }
+    elif system_content:
+        # If there's no user message, add one
+        normalized.insert(0, {"role": "user", "content": system_content.strip()})
+
+    return normalized
+
+
 def _messages_with_thinking(
     item: EvalItem, thinking: ThinkingConfig
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """Item messages plus the extra_body knobs vLLM needs for the thinking mode."""
-    messages = [dict(m) for m in item.messages]
+    messages = _normalize_messages([dict(m) for m in item.messages])
     extra: dict[str, Any] = {}
     if thinking.mode is ThinkingMode.OFF:
         # Qwen-style templates accept this kwarg; templates without it ignore it
@@ -181,8 +234,16 @@ def generate_all(
     store: CompletionStore,
     *,
     max_workers: int = 192,
+    alive: Callable[[], bool] | None = None,
 ) -> dict[str, int]:
-    """Generate every missing (item, repeat) completion. Returns per-benchmark counts."""
+    """Generate every missing (item, repeat) completion. Returns per-benchmark counts.
+
+    ``alive`` is the serving process's liveness probe. When the server dies the
+    pool stops immediately instead of draining every queued request into a dead
+    socket (three attempts of backoff each, across tens of thousands of items);
+    a wedged-but-alive engine is caught by the consecutive-error streak, which
+    fires long before the flat per-request timeouts would.
+    """
     todo: list[tuple[EvalItem, int]] = []
     for item in items:
         for repeat in range(sampling.n_repeats):
@@ -193,20 +254,49 @@ def generate_all(
 
     done: dict[str, int] = {}
     written = 0
+    consecutive_errors = 0
     t0 = time.monotonic()
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
             pool.submit(_one, client, model_ref, item, repeat, sampling, thinking): item
             for item, repeat in todo
         }
-        for fut in as_completed(futures):
-            record = fut.result()
-            store.write(record)
-            written += 1
-            done[record.benchmark] = done.get(record.benchmark, 0) + 1
-            if written % 200 == 0:
-                rate = written / max(time.monotonic() - t0, 1e-9)
-                log.info("generated %d/%d (%.1f/s)", written, len(todo), rate)
+        try:
+            for fut in as_completed(futures):
+                record = fut.result()
+                store.write(record)
+                written += 1
+                done[record.benchmark] = done.get(record.benchmark, 0) + 1
+                consecutive_errors = 0 if record.content is not None else consecutive_errors + 1
+                if written % 200 == 0:
+                    rate = written / max(time.monotonic() - t0, 1e-9)
+                    log.info("generated %d/%d (%.1f/s)", written, len(todo), rate)
+                if alive is not None and written % 64 == 0 and not alive():
+                    raise GenerationAbortedError(
+                        f"serving process died after {written}/{len(todo)} completions; "
+                        "remaining items were not attempted"
+                    )
+                if consecutive_errors >= _ABORT_ERROR_STREAK:
+                    # Before aborting, verify the server is actually unhealthy
+                    # (not just a transient network hiccup or template error)
+                    if alive is not None and alive():
+                        raise GenerationAbortedError(
+                            f"{consecutive_errors} consecutive failed completions after "
+                            f"{written}/{len(todo)} -- server process is alive but not serving; "
+                            "check for chat template errors, OOM, or GPU issues in serve log"
+                        )
+                    else:
+                        raise GenerationAbortedError(
+                            f"{consecutive_errors} consecutive failed completions after "
+                            f"{written}/{len(todo)} -- server process has died; "
+                            "see completions.jsonl error fields and the serve log"
+                        )
+        except BaseException:
+            # Ctrl-C, an abort, anything: cancel what has not started rather than
+            # executing the entire submitted queue on the way out.
+            for fut in futures:
+                fut.cancel()
+            raise
     return done
 
 
@@ -224,10 +314,14 @@ def _one(
         "messages": messages,
         "temperature": sampling.temperature,
         "top_p": sampling.top_p,
+        "presence_penalty": sampling.presence_penalty,
         "max_tokens": thinking.total_budget,
         "seed": _seed_for(item.benchmark, item.item_id, repeat, sampling.seed),
         "timeout": _REQUEST_TIMEOUT_S,
     }
+    # top_k is a vLLM extension, not an OpenAI SDK parameter: it travels in the
+    # body alongside the thinking knobs, or create() TypeErrors client-side.
+    extra["top_k"] = sampling.top_k
     if extra:
         # vLLM-specific knobs travel in the request *body*, not as SDK parameters:
         # openai's create() has a closed signature and would raise TypeError before
@@ -239,12 +333,18 @@ def _one(
     for attempt in range(_MAX_ATTEMPTS):
         try:
             response = client.chat.completions.create(**kwargs)
+            error = None  # a stale error string must not ride along on a success
             break
         except Exception as exc:
             error = f"{type(exc).__name__}: {str(exc)[:300]}"
+            # Detect template-related errors for better diagnostics
+            if "template" in str(exc).lower() or "chat" in str(exc).lower():
+                error = f"TemplateError: {str(exc)[:300]}"
             response = None
             if attempt < _MAX_ATTEMPTS - 1:
-                time.sleep(_BACKOFF_S[attempt])
+                # Jittered so a shared hiccup does not re-synchronize 192 workers
+                # into one thundering retry wave exactly when the server is slowest.
+                time.sleep(_BACKOFF_S[attempt] * (0.5 + random.random()))
 
     content = reasoning = finish_reason = None
     prompt_tokens = completion_tokens = None
@@ -283,7 +383,7 @@ def _constrained_retry(
     try:
         response = client.chat.completions.create(
             model=model_ref,
-            messages=[dict(m) for m in item.messages],
+            messages=_normalize_messages([dict(m) for m in item.messages]),
             temperature=max(sampling.temperature, 0.1),
             max_tokens=32,
             seed=_seed_for(item.benchmark, item.item_id, 9999, sampling.seed),

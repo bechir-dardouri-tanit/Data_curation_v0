@@ -27,14 +27,41 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from medrl.core.config import EvalConfig, JudgeConfig, ModelConfig, ServingPattern
+from medrl.core.logging import get_logger
 
 Role = Literal["policy", "judge"]
+
+log = get_logger(__name__)
 
 
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return int(s.getsockname()[1])
+
+
+def claim_port(phase: ServePhase) -> ServePhase:
+    """Re-verify a planned port right before it is bound, re-drawing if taken.
+
+    A plan is computed at t=0 but a judge phase binds only after the entire
+    policy generation -- hours later, through a window in which the kernel can
+    hand the same port out as an ephemeral *source* port. Re-checking here
+    shrinks the exposure from hours to the milliseconds between this probe and
+    vLLM's own bind; an occupied port gets a fresh one rather than an
+    EADDRINUSE crash after all the generation GPU-hours.
+    """
+    if phase.port is None:
+        return phase.model_copy(update={"port": free_port()})
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", phase.port))
+        except OSError:
+            drawn = free_port()
+            log.warning("%s: planned port %d was taken in the window; using %d",
+                        phase.role, phase.port, drawn)
+            return phase.model_copy(update={"port": drawn})
+    return phase
 
 
 class ServePhase(BaseModel):
@@ -52,6 +79,7 @@ class ServePhase(BaseModel):
     # Text-only checkpoints need no vision profiling; keeps KV cache budget for text.
     language_model_only: bool = True
     reasoning_parser: str | None = "qwen3"
+    max_num_seqs: int | None = Field(default=None, ge=1, description="Maximum sequences for Mamba SSM models")
 
     @model_validator(mode="after")
     def _tp_matches_gpus(self) -> Self:
@@ -76,6 +104,10 @@ class ServePhase(BaseModel):
             argv.append("--language-model-only")
         if self.reasoning_parser:
             argv.extend(["--reasoning-parser", self.reasoning_parser])
+        if self.model.trust_remote_code:
+            argv.append("--trust-remote-code")
+        if self.max_num_seqs is not None:
+            argv.extend(["--max-num-seqs", str(self.max_num_seqs)])
         return argv
 
     def env(self) -> dict[str, str]:
@@ -144,6 +176,7 @@ def plan_deployment(
         max_model_len=policy_len,
         gpu_memory_utilization=cluster.gpu_memory_utilization,
         port=policy_port or free_port(),
+        max_num_seqs=cluster.max_num_seqs,
     )
 
     judge_cfg: JudgeConfig | None = config.judge

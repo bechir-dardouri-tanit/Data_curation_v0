@@ -37,12 +37,21 @@ DECOR_OPEN = "\"'\u201c\u2018\u00ab(<[" + _MARKDOWN_DECOR
 DECOR_CLOSE = _MARKDOWN_DECOR + "\"'\u201d\u2019\u00bb.)>]:,!"
 _LETTER_DECOR = DECOR_OPEN + DECOR_CLOSE + "!{}"
 
-# The output-contract marker is case-sensitive on purpose: "Answer:" is what the prompt
-# mandates, and matching "answer:"/"ANSWER:" mid-prose would fish letters out of the
-# reasoning block. A model that only ever writes "ANSWER: B" fails extraction, which is
-# a contract violation worth measuring, not papering over.
+# Case-insensitive Answer: marker to handle models that write "answer:", "ANSWER:", "Answer:"
+# etc. Robustness over strictness - we want to extract correct answers even when format
+# varies, as long as we can reliably identify the intent.
 _ANSWER_RE = re.compile(
-    r"Answer:\s*[" + re.escape(DECOR_OPEN) + r"]{0,4}\(?([A-Ea-e])\)?(?![A-Za-z0-9])"
+    r"(?i:Answer):\s*[" + re.escape(DECOR_OPEN) + r"]{0,4}\(?([A-Ea-e])\)?(?![A-Za-z0-9])"
+)
+
+# Prose answer patterns for conversational models that don't use "Answer:" markers
+# Captures phrases like "the answer is B", "I choose option C", etc.
+_PROSE_ANSWER_RE = re.compile(
+    r"(?:the\s+)?answer\s+is\s+(?:option\s+)?([A-Ea-e])"
+    r"|(?:i\s+)?(?:would\s+)?choose\s+(?:option\s+)?([A-Ea-e])"
+    r"|select\s+(?:option\s+)?([A-Ea-e])"
+    r"|correct\s+option\s+is\s+(?:option\s+)?([A-Ea-e])",
+    re.IGNORECASE | re.MULTILINE
 )
 _BOXED_OPEN_RE = re.compile(r"\\boxed\s*\{")
 
@@ -66,9 +75,10 @@ def _answer_re(letters: str) -> re.Pattern[str]:
     """The CONTRACT marker regex for a non-default alphabet (default uses _ANSWER_RE).
 
     Mirrors ``_ANSWER_RE``'s shape; the only difference is the letter class.
+    Case-insensitive for robustness.
     """
     return re.compile(
-        r"Answer:\s*[" + re.escape(DECOR_OPEN) + r"]{0,4}\(?(["
+        r"(?i:Answer):\s*[" + re.escape(DECOR_OPEN) + r"]{0,4}\(?(["
         + letters[0]
         + "-"
         + letters[-1]
@@ -110,6 +120,7 @@ class ExtractionPath(StrEnum):
     CONTRACT = "contract"
     GUIDED_JSON = "guided_json"
     BOXED = "boxed"
+    PROSE = "prose"
     LAST_LINE = "last_line"
     FAILED = "failed"
 
@@ -257,6 +268,7 @@ def extract_mcqa(text: str, letters: str = _LETTERS) -> ExtractionResult:
     Priority order, first hit wins: CONTRACT (the prompted ``Answer: X`` marker) >
     GUIDED_JSON (a ``{"answer": "B"}`` object from guided decoding, even with trailing
     prose or a ```json fence around it) > BOXED (a letter inside ``\boxed{}``) >
+    PROSE (conversational phrases like "the answer is B") >
     LAST_LINE (a bare final letter, the loosest signal, kept last so it cannot shadow a
     stronger one that appeared *earlier* in the text). Within a path the last occurrence
     wins. Empty/``None``-ish input returns FAILED rather than raising, because reward
@@ -299,6 +311,26 @@ def extract_mcqa(text: str, letters: str = _LETTERS) -> ExtractionResult:
             boxed_result = ExtractionResult(letter, ExtractionPath.BOXED, (start, end))
     if boxed_result is not None:
         return boxed_result
+
+    # PROSE: conversational models that don't use "Answer:" markers but still clearly
+    # indicate their choice with phrases like "the answer is B", "I choose option C", etc.
+    prose_result: ExtractionResult | None = None
+    prose_matches = list(_PROSE_ANSWER_RE.finditer(text))
+    if prose_matches:
+        # Take the last prose answer (models might change their mind)
+        m = prose_matches[-1]
+        # Check all groups (different alternatives capture in different groups)
+        raw_letter = None
+        for i in range(1, 5):  # We have 4 possible groups
+            if m.group(i):
+                raw_letter = m.group(i)
+                break
+        if raw_letter:
+            letter = normalize_letter(raw_letter, letters)
+            if letter is not None:
+                prose_result = ExtractionResult(letter, ExtractionPath.PROSE, (m.start(), m.end()))
+    if prose_result is not None:
+        return prose_result
 
     # LAST_LINE: the last bare-letter line wins, like every other path -- a model that
     # writes "A" while enumerating options and commits to "B" at the end answered B.

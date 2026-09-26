@@ -19,17 +19,20 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from medrl.core.logging import get_logger
-from medrl.eval.serving.vllm import ServePhase
+from medrl.eval.serving.vllm import ServePhase, claim_port
 
 log = get_logger(__name__)
 
 _HEALTH_TIMEOUT_S = 3600
 _POLL_INTERVAL_S = 5.0
 _TERM_GRACE_S = 60.0
+_KILL_WAIT_S = 30.0
+_MAX_KILL_ROUNDS = 4
 _LOG_TAIL_LINES = 40
 
 
@@ -42,6 +45,10 @@ class ServerHandle:
     phase: ServePhase
     base_url: str
     log_path: Path
+    alive: Callable[[], bool]
+    """True while the server process has not exited; polled mid-generation so a
+    dead engine fails the run in seconds instead of draining every queued
+    request into it for hours."""
 
 
 def _http_ok(url: str, timeout: float = 5.0) -> bool:
@@ -63,8 +70,49 @@ class VLMMServer:
         self.log_path = self.run_dir / f"serve-{phase.role}.log"
         self.base_url = f"http://127.0.0.1:{phase.port}"
 
+    @property
+    def pid_path(self) -> Path:
+        return self.run_dir / f"serve-{self.phase.role}.pid"
+
+    def _reap_stale(self) -> None:
+        """Kill a server orphaned by a crashed runner before starting a new one.
+
+        ``vllm serve`` is launched in its own session and has no parent-death
+        signal, so a SIGKILLed runner leaves it holding both GPUs and its port
+        indefinitely -- and the next launch would OOM beside it. The pid file
+        written by the previous ``start()`` is the only durable record of what
+        to reap.
+        """
+        try:
+            pid = int(self.pid_path.read_text().strip())
+        except (OSError, ValueError):
+            return
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return  # already gone
+        log.warning("%s: pid %d from a previous run is still alive; killing it",
+                    self.phase.role, pid)
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(pid, sig) if os.getpgid(pid) != os.getpgid(os.getpid()) \
+                    else os.kill(pid, sig)
+            except OSError:
+                return
+            for _ in range(12):
+                try:
+                    os.kill(pid, 0)
+                    time.sleep(5.0)
+                except OSError:
+                    return
+
     def start(self) -> ServerHandle:
         self.run_dir.mkdir(parents=True, exist_ok=True)
+        self._reap_stale()
+        # Resolve the port last: the window that matters is between this claim
+        # and vLLM's bind, not the hours between planning and now.
+        self.phase = claim_port(self.phase)
+        self.base_url = f"http://127.0.0.1:{self.phase.port}"
         env = {**os.environ, **self.phase.env()}
         log.info("starting %s server on GPUs %s (port %d; log %s)",
                  self.phase.role, list(self.phase.gpu_ids), self.phase.port, self.log_path)
@@ -78,16 +126,22 @@ class VLMMServer:
                 env=env,
                 start_new_session=True,  # own process group: teardown kills workers too
             )
+        self.pid_path.write_text(str(self.proc.pid))
         deadline = time.monotonic() + self.startup_timeout_s
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:
+                # The leader died but workers may live on in its group.
+                self._signal(signal.SIGKILL)
                 raise ServerError(
                     f"{self.phase.role} server exited rc={self.proc.returncode} during startup:\n"
                     f"{self._log_tail()}"
                 )
             if _http_ok(f"{self.base_url}/health"):
                 log.info("%s server healthy after %.0fs", self.phase.role, self.startup_timeout_s - (deadline - time.monotonic()))
-                return ServerHandle(phase=self.phase, base_url=self.base_url + "/v1", log_path=self.log_path)
+                return ServerHandle(
+                    phase=self.phase, base_url=self.base_url + "/v1", log_path=self.log_path,
+                    alive=lambda: self.proc is not None and self.proc.poll() is None,
+                )
             time.sleep(_POLL_INTERVAL_S)
         self.stop()
         raise ServerError(
@@ -103,10 +157,30 @@ class VLMMServer:
                 self.proc.wait(timeout=_TERM_GRACE_S)
             except subprocess.TimeoutExpired:
                 log.warning("%s server ignored SIGTERM; SIGKILL", self.phase.role)
-                self._signal(signal.SIGKILL)
-                self.proc.wait()
+                self._kill_until_gone()
         log.info("%s server stopped (rc=%s)", self.phase.role, self.proc.returncode)
+        self.pid_path.unlink(missing_ok=True)
         self.proc = None
+
+    def _kill_until_gone(self) -> None:
+        """SIGKILL in bounded rounds; an unkillable (D-state) child is surfaced,
+        not waited on forever -- a wedged teardown must not freeze the runner
+        while it holds both GPUs."""
+        import subprocess as sp
+
+        assert self.proc is not None
+        for _ in range(_MAX_KILL_ROUNDS):
+            self._signal(signal.SIGKILL)
+            try:
+                self.proc.wait(timeout=_KILL_WAIT_S)
+                return
+            except sp.TimeoutExpired:
+                continue
+        raise ServerError(
+            f"{self.phase.role} server pid {self.proc.pid} survived {_MAX_KILL_ROUNDS} SIGKILLs "
+            f"({_MAX_KILL_ROUNDS * _KILL_WAIT_S:.0f}s) -- likely stuck in an uninterruptible "
+            "driver call; it still holds the GPUs and must be cleared manually"
+        )
 
     def _signal(self, sig: int) -> None:
         """Signal the child's whole group -- but only when it *has* its own group.

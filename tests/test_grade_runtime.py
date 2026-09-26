@@ -240,8 +240,84 @@ def test_thinking_knobs_travel_in_extra_body(tmp_path) -> None:
         CompletionStore(tmp_path / "c.jsonl"),
     )
     call = client.calls[0]
-    assert call["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert call["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False},
+        "top_k": 40,  # vLLM extension params ride in the body too
+    }
     assert "chat_template_kwargs" not in call
+
+
+def test_sampling_config_travels_in_full() -> None:
+    from medrl.eval.generate import _one
+
+    item = _letter_item()
+    client = _FakeClient()
+    _one(client, "m", item, 0,
+         SamplingConfig(n_repeats=1, top_k=37, presence_penalty=0.15),
+         ThinkingConfig(mode=ThinkingMode.OFF, think_budget=0))
+    call = client.calls[0]
+    assert call["presence_penalty"] == 0.15
+    assert call["extra_body"]["top_k"] == 37
+    assert "top_k" not in call  # vLLM extension, not an SDK parameter
+
+
+def test_error_field_clears_on_success(tmp_path) -> None:
+    """A retry that lands must not store its earlier failure string."""
+    from medrl.eval.generate import _one
+
+    class _OnceFlaky(_FakeClient):
+        n = 0
+
+        def create(self, **kw):
+            _OnceFlaky.n += 1
+            if _OnceFlaky.n == 1:
+                raise RuntimeError("transient")
+            return super().create(**kw)
+
+    item = _letter_item()
+    rec = _one(_OnceFlaky(), "m", item, 0,
+               SamplingConfig(n_repeats=1), ThinkingConfig(mode=ThinkingMode.OFF, think_budget=0))
+    assert rec.content is not None and rec.error is None
+
+
+def test_generate_all_aborts_when_server_dies(tmp_path) -> None:
+    from medrl.eval.generate import GenerationAbortedError
+
+    # The liveness probe is consulted every 64 writes; 65 items guarantee the
+    # boundary is crossed while work remains.
+    items = [_letter_item() for _ in range(65)]
+    store = CompletionStore(tmp_path / "c.jsonl")
+    with pytest.raises(GenerationAbortedError, match="died"):
+        generate_all(
+            _FakeClient(), "m", items,
+            SamplingConfig(n_repeats=1), ThinkingConfig(mode=ThinkingMode.OFF, think_budget=0),
+            store, max_workers=1, alive=lambda: False,
+        )
+
+
+def test_generate_all_aborts_on_error_streak(tmp_path, monkeypatch) -> None:
+    import medrl.eval.generate as gen
+    from medrl.eval.generate import GenerationAbortedError
+
+    # Shrink the streak and the backoff: the production values (256, [5, 30]s)
+    # exist for a 55k-completion GPU run, not for a unit test.
+    monkeypatch.setattr(gen, "_ABORT_ERROR_STREAK", 2)
+    monkeypatch.setattr(gen, "_BACKOFF_S", (0.0, 0.0))
+
+    class _Dead(_FakeClient):
+        def create(self, **kw):
+            raise RuntimeError("connection refused")
+
+    items = [_letter_item() for _ in range(4)]
+    store = CompletionStore(tmp_path / "c.jsonl")
+    with pytest.raises(GenerationAbortedError, match="server process is alive but not serving"):
+        generate_all(
+            _Dead(), "m", items,
+            SamplingConfig(n_repeats=1), ThinkingConfig(mode=ThinkingMode.OFF, think_budget=0),
+            store, max_workers=1, alive=lambda: True,
+        )
+    # Every attempted item errored and was persisted: the diagnosis is on disk.
+    assert store.path.stat().st_size > 0
 
 
 def test_seeds_are_process_and_order_independent() -> None:
@@ -313,6 +389,7 @@ class _FakeClient:
         messages: list[dict],
         temperature: float,
         top_p: float | None = None,
+        presence_penalty: float = 0.0,
         max_tokens: int,
         seed: int,
         timeout: float,
@@ -323,6 +400,7 @@ class _FakeClient:
         # before a request is ever sent. This fake must fail the same way.
         self.calls.append(
             {
+                "presence_penalty": presence_penalty,
                 "model": model, "messages": messages, "temperature": temperature,
                 "top_p": top_p, "max_tokens": max_tokens, "seed": seed,
                 "timeout": timeout, "extra_body": extra_body,

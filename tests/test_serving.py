@@ -41,6 +41,23 @@ def test_policy_command_carries_text_only_contract(eval_config: EvalConfig) -> N
     assert "--tensor-parallel-size 2" in joined
 
 
+def test_policy_command_includes_trust_remote_code_when_set(eval_config: EvalConfig) -> None:
+    """Models requiring trust_remote_code (e.g., BioMistral) pass the flag to vLLM."""
+    from medrl.core.config import ModelConfig
+
+    cfg = eval_config.model_copy(
+        update={"model": ModelConfig(hf_id="BioMistral/BioMistral-7B", text_only=True, trust_remote_code=True)}
+    )
+    argv = plan_deployment(cfg, policy_port=8100).policy.command()
+    assert "--trust-remote-code" in argv
+
+
+def test_policy_command_omits_trust_remote_code_when_not_set(eval_config: EvalConfig) -> None:
+    """Models without trust_remote_code do not pass the flag."""
+    argv = plan_deployment(eval_config, policy_port=8100).policy.command()
+    assert "--trust-remote-code" not in argv
+
+
 def test_split_gpu_concedes_policy_to_one_gpu() -> None:
     cfg = load_eval_config("decision_grade").model_copy(update={"serving": ServingPattern.SPLIT_GPU})
     plan = plan_deployment(cfg, policy_port=8100, judge_port=8101)
@@ -49,6 +66,29 @@ def test_split_gpu_concedes_policy_to_one_gpu() -> None:
     judge_gpus = set(plan.phases[1].gpu_ids)
     assert policy_gpus and judge_gpus and policy_gpus.isdisjoint(judge_gpus)
     assert plan.policy.tensor_parallel == 1
+
+
+def test_claim_port_keeps_a_free_planned_port(eval_config: EvalConfig) -> None:
+    from medrl.eval.serving.vllm import claim_port, free_port
+
+    phase = plan_deployment(eval_config, policy_port=None, judge_port=None).policy
+    drawn = free_port()
+    claimed = claim_port(phase.model_copy(update={"port": drawn}))
+    assert claimed.port == drawn
+
+
+def test_claim_port_redraws_a_taken_port(eval_config: EvalConfig) -> None:
+    import socket
+
+    from medrl.eval.serving.vllm import claim_port
+
+    phase = plan_deployment(eval_config, policy_port=None, judge_port=None).policy
+    with socket.socket() as squatter:
+        squatter.bind(("127.0.0.1", 0))
+        squatter.listen(1)
+        taken = squatter.getsockname()[1]
+        claimed = claim_port(phase.model_copy(update={"port": taken}))
+    assert claimed.port != taken  # EADDRINUSE after the generation hours, not
 
 
 def test_judge_phase_parses_reasoning_out_of_content(eval_config: EvalConfig) -> None:

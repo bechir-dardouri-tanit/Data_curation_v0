@@ -39,20 +39,64 @@ class _OK(BaseHTTPRequestHandler):
 
 
 def test_healthy_server_is_detected_and_stopped(tmp_path, monkeypatch) -> None:
-    httpd = HTTPServer(("127.0.0.1", 0), _OK)
-    port = httpd.server_address[1]
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    # In production the health endpoint is the vllm process itself, which binds
+    # the port AFTER start() claims it -- so the fake health server has to come
+    # up inside the claim step, not before it (a pre-bound port reads as "taken
+    # in the window" and gets re-drawn).
+    bound: list[tuple[HTTPServer, int]] = []
+
+    import medrl.eval.serving.lifecycle as lifecycle
+    from medrl.eval.serving.vllm import free_port
+
+    def _claim(phase: ServePhase) -> ServePhase:
+        port = free_port()
+        httpd = HTTPServer(("127.0.0.1", port), _OK)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        bound.append((httpd, port))
+        return phase.model_copy(update={"port": port})
+
+    monkeypatch.setattr(lifecycle, "claim_port", _claim)
 
     # Stand in for `vllm serve`: a sleep that dies on SIGTERM.
-    monkeypatch.setattr(
-        ServePhase, "command",
-        lambda self: ["sleep", "600"],
-    )
-    server = VLMMServer(_phase(port), run_dir=tmp_path)
+    monkeypatch.setattr(ServePhase, "command", lambda self: ["sleep", "600"])
+    server = VLMMServer(_phase(64999), run_dir=tmp_path)
     handle = server.start()
+    port = bound[0][1]
     assert handle.base_url.endswith(f":{port}/v1")
+    assert server.pid_path.exists()  # the durable record for stale reaping
+    assert handle.alive()  # liveness probe wired for mid-generation polling
     server.stop()
-    httpd.shutdown()
+    assert not server.pid_path.exists()  # a clean stop clears the record
+    bound[0][0].shutdown()
+
+
+def test_stale_pid_file_is_reaped_before_start(tmp_path, monkeypatch) -> None:
+    """A vLLM orphaned by a SIGKILLed runner must not OOM the next launch."""
+    import subprocess
+
+    orphan = subprocess.Popen(["sleep", "600"], start_new_session=True)
+    tmp_path.joinpath("serve-policy.pid").write_text(str(orphan.pid))
+    assert orphan.poll() is None
+
+    bound: list[tuple[HTTPServer, int]] = []
+    import medrl.eval.serving.lifecycle as lifecycle
+    from medrl.eval.serving.vllm import free_port
+
+    def _claim(phase: ServePhase) -> ServePhase:
+        port = free_port()
+        httpd = HTTPServer(("127.0.0.1", port), _OK)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        bound.append((httpd, port))
+        return phase.model_copy(update={"port": port})
+
+    monkeypatch.setattr(lifecycle, "claim_port", _claim)
+    monkeypatch.setattr(ServePhase, "command", lambda self: ["sleep", "600"])
+
+    server = VLMMServer(_phase(64999), run_dir=tmp_path)
+    server.start()
+    assert orphan.poll() is not None  # reaped, not raced
+    server.stop()
+    bound[0][0].shutdown()
 
 
 def test_dead_process_reports_log_tail(tmp_path, monkeypatch) -> None:
