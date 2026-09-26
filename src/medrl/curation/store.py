@@ -96,10 +96,16 @@ def _from_arrow_row(row: dict) -> CorpusItem:
 
 
 def write_items(items: Iterable[CorpusItem], directory: Path, max_rows_per_file: int = 50_000) -> int:
-    """Write items as part files; returns count written. Sorted by id for stable hashes."""
+    """Write items as part files; returns count written. Sorted by id for stable hashes.
+
+    Multiple calls into the same directory APPEND (part numbering continues from
+    the existing files), so chunked writes are safe; each call must receive a
+    disjoint, internally-unique id set.
+    """
     buf: list[CorpusItem] = []
     n = 0
-    part = 0
+    existing = [int(f.stem.split("-")[1]) for f in directory.glob("part-*.parquet")]
+    part = (max(existing) + 1) if existing else 0
 
     def flush(rows: list[CorpusItem]) -> None:
         nonlocal part, n
