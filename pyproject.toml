@@ -38,6 +38,23 @@ data = [
     "pyarrow>=18.0",
     "regex>=2024.11",
 ]
+# Curation pipeline (S0-S15): heavy storage/query stack for the training-corpus build.
+# Pins researched 2026-09-26 -- see docs/CURATION_IMPLEMENTATION_PLAN.md section 1.2.
+curation = [
+    "duckdb==1.5.5",
+    "datatrove[io]~=0.10.0",
+    "datasketch==2.0.0",
+    "usearch==2.26.2",
+    "ladybug==0.20.4",          # KG store: maintained community continuation of kuzu (archived 2025-10-10)
+    "xxhash>=3.5,<4.0",
+]
+# Entity linking / terminology (S7-S10). Licence-gated: needs UMLS 2025AB (or the OMOP
+# fallback) plus SNOMED CT FR from the ANS NRC; installed only on the curation node.
+entity = [
+    "medcat==2.9.0",            # MedCAT v2 (cogstack-nlp); v1 archived 2025-07-28
+    "edsnlp==0.23.0",           # FR linking without UMLS: eds.drugs/eds.cim10/eds.adicap + span_linker
+    "scispacy==0.6.2",          # optional EN ensemble; caps python <3.13
+]
 # Training. Installed only on GPU nodes.
 train = [
     "torch>=2.6",

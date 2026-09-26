@@ -8,6 +8,7 @@ be audited after the fact -- an unauditable judge is indistinguishable from a ra
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Protocol
 
 from medrl.core.config import EvalConfig, TrackingConfig
@@ -31,8 +32,11 @@ SAMPLE_COLUMNS = (
 class TrackingSink(Protocol):
     def log_config(self, config: dict[str, Any]) -> None: ...
     def log_metrics(self, metrics: dict[str, Any], step: int | None = None) -> None: ...
-    def log_samples(self, rows: list[dict[str, Any]]) -> None: ...
+    def log_samples(self, table_name: str, rows: list[dict[str, Any]]) -> None: ...
+    def save_artifact(self, name: str, path: Path, artifact_type: str) -> None: ...
     def finish(self) -> None: ...
+    @property
+    def run_id(self) -> str | None: ...
 
 
 class NullSink:
@@ -40,20 +44,25 @@ class NullSink:
 
     def log_config(self, config: dict[str, Any]) -> None: pass
     def log_metrics(self, metrics: dict[str, Any], step: int | None = None) -> None: pass
-    def log_samples(self, rows: list[dict[str, Any]]) -> None: pass
+    def log_samples(self, table_name: str, rows: list[dict[str, Any]]) -> None: pass
+    def save_artifact(self, name: str, path: Path, artifact_type: str) -> None: pass
     def finish(self) -> None: pass
+    @property
+    def run_id(self) -> str | None: return None
 
 
 class WandbSink:
     """W&B-backed sink; constructed only when tracking is enabled and the lib exists."""
 
-    def __init__(self, cfg: TrackingConfig, job_type: str, run_name: str) -> None:
+    def __init__(self, cfg: TrackingConfig, job_type: str, run_name: str, *, resume_run_id: str | None = None) -> None:
         import wandb  # imported lazily: the CPU dev box does not install it
 
+        self._cfg = cfg
         self._run = wandb.init(
             project=cfg.project, entity=cfg.entity, group=cfg.group,
             job_type=job_type, name=run_name, tags=list(cfg.tags),
             config=dict.fromkeys(CONFIG_KEYS), reinit=True,
+            id=resume_run_id, resume="allow" if resume_run_id else None,
         )
 
     def log_config(self, config: dict[str, Any]) -> None:
@@ -62,23 +71,37 @@ class WandbSink:
     def log_metrics(self, metrics: dict[str, Any], step: int | None = None) -> None:
         self._run.log(metrics, step=step)
 
-    def log_samples(self, rows: list[dict[str, Any]]) -> None:
+    def log_samples(self, table_name: str, rows: list[dict[str, Any]]) -> None:
         import wandb
 
-        table = wandb.Table(columns=list(SAMPLE_COLUMNS))
+        if not rows:
+            return
+        columns = list(rows[0].keys())
+        table = wandb.Table(columns=columns)
         for row in rows:
-            table.add_data(*[row.get(c) for c in SAMPLE_COLUMNS])
-        self._run.log({"samples": table})
+            table.add_data(*[row.get(c) for c in columns])
+        self._run.log({table_name: table})
+
+    def save_artifact(self, name: str, path: Path, artifact_type: str) -> None:
+        import wandb
+
+        artifact = wandb.Artifact(name, type=artifact_type)
+        artifact.add_dir(str(path))
+        self._run.log_artifact(artifact)
 
     def finish(self) -> None:
         self._run.finish()
 
+    @property
+    def run_id(self) -> str:
+        return str(self._run.id)
 
-def make_sink(tracking: TrackingConfig, job_type: str, run_name: str) -> TrackingSink:
+
+def make_sink(tracking: TrackingConfig, job_type: str, run_name: str, *, resume_run_id: str | None = None) -> TrackingSink:
     if not tracking.enabled or tracking.backend == "none":
         return NullSink()
     try:
-        return WandbSink(tracking, job_type, run_name)
+        return WandbSink(tracking, job_type, run_name, resume_run_id=resume_run_id)
     except ImportError:
         return NullSink()
 
