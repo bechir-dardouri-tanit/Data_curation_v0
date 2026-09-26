@@ -1,0 +1,5 @@
+# deployment: sequential
+# phase 1: policy on GPUs [0, 1]
+vllm serve google/medgemma-27b-text-it --port 33519 --tensor-parallel-size 2 --max-model-len 10240 --gpu-memory-utilization 0.85 --dtype bfloat16 --language-model-only --reasoning-parser qwen3 --trust-remote-code --max-num-seqs 400
+# phase 2: judge on GPUs [0]
+vllm serve Qwen/Qwen3.5-4B --port 49487 --tensor-parallel-size 1 --max-model-len 32768 --gpu-memory-utilization 0.85 --dtype bfloat16 --language-model-only --reasoning-parser qwen3

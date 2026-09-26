@@ -1,0 +1,86 @@
+{
+  "medqa": {
+    "benchmark": "medqa",
+    "points": 40.04320502749411,
+    "ci_low": 37.96150824823252,
+    "ci_high": 42.14503142183817,
+    "n_items": 1273,
+    "n_repeats": 4,
+    "repeats_missing": 0,
+    "extraction_fail_rate": 0.0002,
+    "think_completion_rate": 1.0,
+    "mde_points": 2.1439133179259695
+  },
+  "medmcqa": {
+    "benchmark": "medmcqa",
+    "points": 39.00035511363637,
+    "ci_low": 37.588778409090914,
+    "ci_high": 40.420809659090914,
+    "n_items": 2816,
+    "n_repeats": 4,
+    "repeats_missing": 0,
+    "extraction_fail_rate": 0.0001,
+    "think_completion_rate": 1.0,
+    "mde_points": 1.395832886407628
+  },
+  "mmlu_pro_health": {
+    "benchmark": "mmlu_pro_health",
+    "points": 24.908312958435207,
+    "ci_low": 22.493887530562347,
+    "ci_high": 27.32273838630807,
+    "n_items": 818,
+    "n_repeats": 4,
+    "repeats_missing": 0,
+    "extraction_fail_rate": 0.0,
+    "think_completion_rate": 1.0,
+    "mde_points": 2.4548706377718945
+  },
+  "medxpertqa_text": {
+    "benchmark": "medxpertqa_text",
+    "points": 10.989795918367347,
+    "ci_low": 10.091836734693878,
+    "ci_high": 11.887755102040815,
+    "n_items": 2450,
+    "n_repeats": 4,
+    "repeats_missing": 0,
+    "extraction_fail_rate": 0.0002,
+    "think_completion_rate": 1.0,
+    "mde_points": 0.9200413628189378
+  },
+  "medcalc": {
+    "benchmark": "medcalc",
+    "points": 7.3798076923076925,
+    "ci_low": 6.490384615384616,
+    "ci_high": 8.317307692307692,
+    "n_items": 1040,
+    "n_repeats": 4,
+    "repeats_missing": 0,
+    "extraction_fail_rate": 0.0,
+    "think_completion_rate": 0.9933,
+    "mde_points": 0.9430260085061827
+  },
+  "mediqal": {
+    "benchmark": "mediqal",
+    "points": 20.62514390973981,
+    "ci_low": 19.813349067464888,
+    "ci_high": 21.442551231867373,
+    "n_items": 4343,
+    "n_repeats": 4,
+    "repeats_missing": 0,
+    "extraction_fail_rate": 0.0003,
+    "think_completion_rate": 1.0,
+    "mde_points": 0.8443069709621421
+  },
+  "healthbench_hard": {
+    "benchmark": "healthbench_hard",
+    "points": 37.87939740738548,
+    "ci_low": 36.55510506386441,
+    "ci_high": 39.17858065423722,
+    "n_items": 1000,
+    "n_repeats": 4,
+    "repeats_missing": 3,
+    "extraction_fail_rate": 0.0,
+    "think_completion_rate": 1.0,
+    "mde_points": 1.3361311043112916
+  }
+}

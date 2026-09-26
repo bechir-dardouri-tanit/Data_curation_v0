@@ -1,0 +1,218 @@
+{
+  "run_id": "eval-68c60e601c26c33b",
+  "stage": "eval",
+  "config_hash": "1201eb0db0622d4a",
+  "config": {
+    "model": {
+      "hf_id": "Qwen/Qwen3.5-9B",
+      "revision": null,
+      "path": null,
+      "dtype": "bfloat16",
+      "attn_implementation": "flash_attention_2",
+      "text_only": true,
+      "trust_remote_code": false
+    },
+    "cluster": {
+      "name": "local_2xh100",
+      "num_gpus": 2,
+      "gpu_memory_gb": 80,
+      "num_nodes": 1,
+      "train_strategy": "lora",
+      "activation_checkpointing": true,
+      "optimizer_offload": false,
+      "param_offload": false,
+      "micro_batch_size": 1,
+      "global_batch_tokens": 262144,
+      "tensor_parallel": 2,
+      "gpu_memory_utilization": 0.85,
+      "rollout_placement": "sequential",
+      "max_model_len": 40960,
+      "max_num_seqs": 400
+    },
+    "benchmarks": [
+      {
+        "name": "medqa",
+        "loader": "medqa",
+        "grade": "decision",
+        "language": "en",
+        "hf_id": "openlifescienceai/medqa",
+        "split": "test",
+        "subset": null,
+        "limit": null,
+        "requires_judge": false,
+        "sampling": null,
+        "thinking": null
+      },
+      {
+        "name": "medmcqa",
+        "loader": "medmcqa",
+        "grade": "decision",
+        "language": "en",
+        "hf_id": "openlifescienceai/medmcqa",
+        "split": "validation",
+        "subset": null,
+        "limit": null,
+        "requires_judge": false,
+        "sampling": null,
+        "thinking": null
+      },
+      {
+        "name": "mmlu_pro_health",
+        "loader": "mmlu_pro",
+        "grade": "decision",
+        "language": "en",
+        "hf_id": "TIGER-Lab/MMLU-Pro",
+        "split": "test",
+        "subset": "health",
+        "limit": null,
+        "requires_judge": false,
+        "sampling": null,
+        "thinking": null
+      },
+      {
+        "name": "medxpertqa_text",
+        "loader": "medxpertqa",
+        "grade": "decision",
+        "language": "en",
+        "hf_id": "TsinghuaC3I/MedXpertQA",
+        "split": "test",
+        "subset": "Text",
+        "limit": null,
+        "requires_judge": false,
+        "sampling": null,
+        "thinking": null
+      },
+      {
+        "name": "medcalc",
+        "loader": "medcalc",
+        "grade": "decision",
+        "language": "en",
+        "hf_id": "ncbi/MedCalc-Bench",
+        "split": "test",
+        "subset": null,
+        "limit": null,
+        "requires_judge": false,
+        "sampling": null,
+        "thinking": null
+      },
+      {
+        "name": "mediqal",
+        "loader": "mediqal",
+        "grade": "decision",
+        "language": "fr",
+        "hf_id": "ANR-MALADES/MediQAl",
+        "split": "test",
+        "subset": "mcqu",
+        "limit": null,
+        "requires_judge": false,
+        "sampling": null,
+        "thinking": null
+      },
+      {
+        "name": "healthbench_hard",
+        "loader": "healthbench",
+        "grade": "decision",
+        "language": "en",
+        "hf_id": "openai/healthbench",
+        "split": "test",
+        "subset": "hard",
+        "limit": null,
+        "requires_judge": true,
+        "sampling": null,
+        "thinking": null
+      }
+    ],
+    "sampling": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 40,
+      "n_repeats": 8,
+      "seed": 0,
+      "max_tokens": 10240,
+      "presence_penalty": 0.0
+    },
+    "thinking": {
+      "mode": "off",
+      "think_budget": 0,
+      "answer_budget": 2048,
+      "prefill_think": true,
+      "strict_incomplete": true
+    },
+    "judge": {
+      "tier": "fast",
+      "model": {
+        "hf_id": "Qwen/Qwen3.5-4B",
+        "revision": null,
+        "path": null,
+        "dtype": "bfloat16",
+        "attn_implementation": "flash_attention_2",
+        "text_only": true,
+        "trust_remote_code": false
+      },
+      "backend": "vllm",
+      "base_url": null,
+      "max_concurrency": 64,
+      "n_consistency": 1,
+      "position_swap": true,
+      "temperature": 0.0,
+      "max_tokens": 512
+    },
+    "serving": "sequential",
+    "tracking": {
+      "enabled": true,
+      "backend": "wandb",
+      "project": "medrl",
+      "entity": null,
+      "group": null,
+      "tags": [],
+      "log_samples": true
+    },
+    "output_dir": null,
+    "max_extraction_fail_rate": 0.25
+  },
+  "inputs": {
+    "model": "Qwen/Qwen3.5-9B"
+  },
+  "outputs": {},
+  "code_sha": "1531be7d6539-dirty",
+  "environment": {
+    "python": "3.12.3",
+    "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.39",
+    "hostname": "scw-amazing-goodall",
+    "packages": {
+      "torch": "2.13.0",
+      "transformers": "5.15.1",
+      "vllm": "0.27.1",
+      "inspect-ai": "0.3.259",
+      "datasets": "5.0.1",
+      "numpy": "2.3.5",
+      "liger-kernel": "0.8.2"
+    },
+    "gpu": {
+      "available": true,
+      "count": 2,
+      "name": "NVIDIA H100 80GB HBM3",
+      "capability": "9.0",
+      "cuda": "13.0"
+    },
+    "relevant_env": {
+      "HF_HUB_CACHE": "/scratch/medrl/.cache/huggingface",
+      "HF_DATASETS_CACHE": "/scratch/medrl/.cache/datasets",
+      "HF_HOME": "/scratch/medrl/.cache/huggingface"
+    }
+  },
+  "started_at": "2026-08-23T11:25:50.702373Z",
+  "finished_at": "2026-08-23T11:38:53.157587Z",
+  "status": "completed",
+  "error": null,
+  "metrics": {
+    "medqa": 85.18263943440691,
+    "medmcqa": 70.97389914772727,
+    "mmlu_pro_health": 72.0354523227384,
+    "medxpertqa_text": 23.79081632653061,
+    "medcalc": 69.0985576923077,
+    "mediqal": 45.38337554685701,
+    "healthbench_hard": 45.643663583708296
+  },
+  "notes": "sequential"
+}

@@ -1,0 +1,5 @@
+# deployment: sequential
+# phase 1: policy on GPUs [0, 1]
+vllm serve EPFLiGHT/EuroLLM-9B-MeditronFO --port 59453 --tensor-parallel-size 2 --max-model-len 4096 --gpu-memory-utilization 0.85 --dtype bfloat16 --language-model-only --reasoning-parser qwen3 --max-num-seqs 400
+# phase 2: judge on GPUs [0]
+vllm serve Qwen/Qwen3.5-4B --port 60081 --tensor-parallel-size 1 --max-model-len 32768 --gpu-memory-utilization 0.85 --dtype bfloat16 --language-model-only --reasoning-parser qwen3
