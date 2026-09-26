@@ -1,0 +1,117 @@
+# MedGemma-4B baseline evaluation
+# google/medgemma-4b-it - Medical instruction-tuned Gemma model
+
+model:
+  hf_id: google/medgemma-4b-it
+  revision: null
+  path: null
+  dtype: bfloat16
+  attn_implementation: flash_attention_2
+  text_only: true
+  trust_remote_code: true  # Google models often require custom code
+
+cluster: local_2xh100
+
+benchmarks:
+  # Decision-grade benchmarks
+  - name: medqa
+    loader: medqa
+    grade: decision
+    language: en
+    hf_id: openlifescienceai/medqa
+    split: test
+    subset: null
+    limit: null
+    requires_judge: false
+
+  - name: medmcqa
+    loader: medmcqa
+    grade: decision
+    language: en
+    hf_id: openlifescienceai/medmcqa
+    split: validation
+    subset: null
+    limit: null
+    requires_judge: false
+
+  - name: mmlu_pro_health
+    loader: mmlu_pro
+    grade: decision
+    language: en
+    hf_id: TIGER-Lab/MMLU-Pro
+    split: test
+    subset: health
+    limit: null
+    requires_judge: false
+
+  - name: medxpertqa_text
+    loader: medxpertqa
+    grade: decision
+    language: en
+    hf_id: TsinghuaC3I/MedXpertQA
+    split: test
+    subset: Text
+    limit: null
+    requires_judge: false
+
+  - name: medcalc
+    loader: medcalc
+    grade: decision
+    language: en
+    hf_id: ncbi/MedCalc-Bench
+    split: test
+    subset: null
+    limit: null
+    requires_judge: false
+
+  - name: mediqal
+    loader: mediqal
+    grade: decision
+    language: fr
+    hf_id: ANR-MALADES/MediQAl
+    split: test
+    subset: mcqu
+    limit: null
+    requires_judge: false
+
+  - name: healthbench_hard
+    loader: healthbench
+    grade: decision
+    language: en
+    hf_id: openai/healthbench
+    split: test
+    subset: hard
+    limit: null
+    requires_judge: true
+
+sampling:
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 40
+  n_repeats: 4
+  seed: 0
+  max_tokens: 10240
+  presence_penalty: 0.0
+
+thinking:
+  mode: "off"  # Gemma doesn't have built-in thinking mode
+  think_budget: 0
+  answer_budget: 2048
+  prefill_think: false
+  strict_incomplete: true
+
+judge: fast
+
+serving: sequential
+
+tracking:
+  enabled: true
+  backend: wandb
+  project: medrl
+  entity: null
+  group: null
+  tags: ["baseline", "medgemma-4b", "decision-grade"]
+  log_samples: true
+
+output_dir: null
+max_extraction_fail_rate: 0.20  # Reduced after extraction fixes (prose pattern, case-insensitive)

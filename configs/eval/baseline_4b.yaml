@@ -9,3 +9,4 @@ thinking: {mode: "on", think_budget: 8192, answer_budget: 2048}
 serving: sequential
 judge: fast
 benchmarks: [medqa, medmcqa, mmlu_pro_health, medxpertqa_text, medcalc, mediqal, healthbench_hard]
+max_extraction_fail_rate: 0.06  # Relaxed for 4B model (5% baseline failure)

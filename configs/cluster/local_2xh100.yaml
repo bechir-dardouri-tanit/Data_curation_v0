@@ -7,3 +7,4 @@ tensor_parallel: 2
 gpu_memory_utilization: 0.85
 max_model_len: 40960
 global_batch_tokens: 262144
+max_num_seqs: 400            # Conservative for Mamba SSM models (404 cache blocks available)

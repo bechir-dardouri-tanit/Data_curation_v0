@@ -78,6 +78,7 @@ class ClusterConfig(Frozen):
     gpu_memory_utilization: Annotated[float, Field(gt=0, le=1)] = 0.85
     rollout_placement: RolloutPlacement = RolloutPlacement.SEQUENTIAL
     max_model_len: Annotated[int, Field(ge=2048)] = 40_960
+    max_num_seqs: Annotated[int, Field(ge=1)] | None = None  # For Mamba SSM models with limited cache blocks
 
     @model_validator(mode="after")
     def _check_topology(self) -> Self:

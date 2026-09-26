@@ -7,10 +7,12 @@
 model:
   hf_id: BioMistral/BioMistral-7B
   dtype: bfloat16
+  trust_remote_code: true  # Required for BioMistral's chat template
+  text_only: true
 cluster: local_2xh100
 sampling: {temperature: 0.7, top_p: 0.8, top_k: 40, n_repeats: 4, seed: 0, max_tokens: 2048}
 thinking: {mode: "off", think_budget: 0, answer_budget: 2048}
 serving: sequential
-max_extraction_fail_rate: 0.2
+max_extraction_fail_rate: 0.15  # Reduced after extraction fixes (prose pattern, case-insensitive)
 judge: fast
 benchmarks: [medqa, medmcqa, mmlu_pro_health, medxpertqa_text, medcalc, mediqal, healthbench_hard]
