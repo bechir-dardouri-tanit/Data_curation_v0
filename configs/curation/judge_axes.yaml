@@ -1,0 +1,76 @@
+# S11 judge axes -- one binary weighted criterion set per quality axis (plan section 2,
+# "judge_axes.yaml: the 3 axis criterion-sets (binary, weighted)"). Per row and axis the
+# judge sees the question + the assistant response and lists the ids of every criterion
+# it met ({"met": [...]}, the medrl/eval/scorers/judge.py met-ids protocol); the stage
+# computes a weighted met-fraction and persists q_coherence / q_clinical / q_format as
+# 0/1 (fraction >= the stage pass threshold, default 0.5).
+#
+# Weighting rule: each axis's safety-critical criterion outweighs the sum of the others,
+# so failing it alone fails the axis at any threshold the stage can express -- a
+# self-contradictory, contraindicated or line-less MCQA answer cannot buy its way past
+# 0.5 on minor criteria. tests/curation/test_judge.py asserts this invariant on this
+# file, so a weight edit that breaks it fails CI instead of silently re-shaping the pool.
+#
+# Applicability rule: criteria whose scope depends on the answer type say so in their own
+# text and are met by definition when out of scope -- free-text rows (most of Pool B)
+# must never be punished for lacking an MCQA answer line or numeric values.
+
+axes:
+  coherence:
+    criteria:
+      - id: coh-self-consistent
+        text: >-
+          The response is internally consistent: no statement, conclusion, or
+          recommendation in it is contradicted by another.
+        weight: 3.0
+      - id: coh-answers-question
+        text: >-
+          The response addresses the question actually asked; it does not evade it,
+          ignore it, or answer a different question.
+        weight: 1.0
+      - id: coh-no-circular-reasoning
+        text: >-
+          The reasoning is not circular: the response does not justify its conclusion
+          by restating the conclusion as its own justification.
+        weight: 1.0
+  clinical:
+    criteria:
+      - id: clin-no-contraindication
+        text: >-
+          The response makes no contraindication error: nothing it recommends is
+          contraindicated for the situation the question describes, and it flags any
+          contraindication present in the case.
+        weight: 4.0
+      - id: clin-escalation-uncertainty
+        text: >-
+          Escalation and uncertainty are handled appropriately: urgent professional
+          care is recommended when the presentation warrants it, and uncertainty is
+          expressed rather than feigned when the question is under-specified. When
+          neither situation arises, this criterion is met.
+        weight: 1.0
+      - id: clin-dosing-sanity
+        text: >-
+          Every dose, frequency, and duration mentioned is plausible for the described
+          patient and consistent with standard practice, with correct units. When no
+          doses are mentioned, this criterion is met.
+        weight: 2.0
+  formatting:
+    criteria:
+      - id: fmt-mcqa-terminal-answer
+        text: >-
+          The response ends with a terminal answer line of the form "Answer: <letter>"
+          naming the chosen option. When the question is not multiple choice, this
+          criterion is met automatically.
+        weight: 3.0
+      - id: fmt-numeric-units
+        text: >-
+          Every numeric value in the final answer carries its unit (mg, mmol/L, %, ...).
+          When the final answer contains no numbers missing units -- including when it
+          contains no numbers at all -- this criterion is met.
+        weight: 1.0
+      - id: fmt-no-roleplay-leakage
+        text: >-
+          The response stays in the medical-assistant role: no system-prompt or
+          instruction leakage, no "As an AI" self-reference, no meta-commentary about
+          being a language model.
+        weight: 1.0

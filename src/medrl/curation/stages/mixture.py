@@ -162,7 +162,7 @@ def _execute_spec(
         )
         cur = con.execute(script)
         cols = [str(d[0]) for d in (cur.description or [])]
-        instances = [dict(zip(cols, row)) for row in cur.fetchall()]
+        instances = [dict(zip(cols, row, strict=True)) for row in cur.fetchall()]
         input_counts = {
             str(s): int(n)
             for s, n in con.execute(
@@ -208,13 +208,6 @@ def _validate_selection(
     if not ids:
         raise StageError(f"S15: {sql_name} selected 0 rows -- refusing to seal an empty mixture")
     return list(dict.fromkeys(ids))
-
-
-def _clear_snapshot(out: Path) -> None:
-    """Drop stale part files so a re-run replaces, matching the runner's resume
-    rule (a stage re-run overwrites its own output; write_items appends)."""
-    for stale in out.glob("part-*.parquet"):
-        stale.unlink()
 
 
 def _compose_subset(inp: Path, out: Path, unique_ids: list[str]) -> int:
@@ -302,9 +295,11 @@ def run_mixture(
         if output_dir is not None
         else store.stage_dir(run_id, f"{STAGE_PREFIX}_{out_name}")
     )
-    out.mkdir(parents=True, exist_ok=True)
     if out.resolve() == inp.resolve():
-        raise StageError("S15: output snapshot must differ from the input snapshot")
+        raise StageError(
+            "S15: output snapshot must differ from the input snapshot (reset_dir would "
+            "destroy the input)"
+        )
     exp = (
         Path(experiments_dir) if experiments_dir is not None else store.EXPERIMENTS_ROOT / run_id
     )
@@ -313,7 +308,9 @@ def run_mixture(
     cols, instances, input_counts, survivors = _execute_spec(files, script)
     unique_ids = _validate_selection(sql_path.name, cols, instances)
 
-    _clear_snapshot(out)
+    # a re-run REPLACES its output (the runner's resume rule); reset_dir is the
+    # store's one definition of that, and the guard above keeps it off the input
+    store.reset_dir(out)
     matched = _compose_subset(inp, out, unique_ids)
     if matched != len(unique_ids):
         raise StageError(

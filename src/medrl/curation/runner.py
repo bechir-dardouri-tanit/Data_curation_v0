@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from collections.abc import Callable
 
 from medrl.curation import store
@@ -63,7 +64,20 @@ def run(run_id: str, stages: list[str]) -> int:
 def register_builtin_stages() -> None:
     """Wire stage modules into STAGES. Idempotent; called by main()."""
     from medrl.curation import registry as registry_mod
-    from medrl.curation.stages import answers, dedup_lex, decontam_ngram, decontam_sem, embed, normalize, structural
+    from medrl.curation.stages import (
+        answers,
+        concept,
+        coverage,
+        dedup_lex,
+        decontam_ngram,
+        decontam_sem,
+        difficulty,
+        embed,
+        judge,
+        mixture,
+        normalize,
+        structural,
+    )
 
     STAGES.setdefault("00_registry", registry_mod.run_registry)
     STAGES.setdefault("01_normalize", normalize.stage_entry)
@@ -72,7 +86,27 @@ def register_builtin_stages() -> None:
     STAGES.setdefault("04_decontam_ngram", decontam_ngram.stage_entry)
     STAGES.setdefault("05_embed", embed.run_embed)
     STAGES.setdefault("06_decontam_sem", decontam_sem.run_decontam_sem)
+    STAGES.setdefault("08_concept", concept.stage_entry)
     STAGES.setdefault("09_answers", answers.run_answers)
+    STAGES.setdefault("11_judge", judge.stage_entry)
+    STAGES.setdefault("12_difficulty", difficulty.stage_entry)
+    STAGES.setdefault("13_coverage", coverage.stage_entry)
+
+    def _mixture_default(run_id: str):
+        # Phase selection is a runner-level choice; the default executes the
+        # full curriculum phase1..phase5 in order when invoked bare.
+        manifests = []
+        for phase in ("phase1", "phase2", "phase3", "phase4", "phase5"):
+            manifests.append(
+                mixture.run_mixture(
+                    run_id,
+                    sql_dir=Path("/root/medrl/configs/curation/mixtures"),
+                    out_name=phase,
+                )
+            )
+        return manifests[-1]
+
+    STAGES.setdefault("15_mixture", _mixture_default)
 
 
 def main(argv: list[str] | None = None) -> int:

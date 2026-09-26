@@ -298,19 +298,19 @@ def grade_sample(item: CorpusItem, content: str | None, reasoning: str | None) -
         result = extract_mcqa(content or "", letters)
         if result.path is ExtractionPath.FAILED and reasoning:
             result = extract_mcqa(reasoning, letters)
-        gold = _gold_letter(item)
-        return gold is not None and verify_letter(result.value, gold, letters)
+        gold_letter = _gold_letter(item)
+        return gold_letter is not None and verify_letter(result.value, gold_letter, letters)
 
     pred = extract_number(content or "")
     if pred is None and reasoning:
         pred = extract_number(reasoning)
-    gold = _gold_number(item)
-    if gold is None:
+    gold_value = _gold_number(item)
+    if gold_value is None:
         return False
     lower, upper = item.meta.get("lower"), item.meta.get("upper")
     if lower is not None and upper is not None:  # MedCalc-style window, as S9
         return pred is not None and float(lower) <= pred <= float(upper)
-    return verify_number(pred, gold, THRESHOLDS.numeric_rtol, THRESHOLDS.numeric_atol)
+    return verify_number(pred, gold_value, THRESHOLDS.numeric_rtol, THRESHOLDS.numeric_atol)
 
 
 # --------------------------------------------------------------------------
@@ -336,9 +336,7 @@ def _read_records(path: Path, wanted: set[str]) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _classify(
-    item: CorpusItem, rec: dict[str, Any] | None
-) -> tuple[bool | None, bool]:
+def _classify(item: CorpusItem, rec: dict[str, Any] | None) -> tuple[bool | None, bool]:
     """(graded, needs_retry) for one sample record. An errored request is a
     missing repeat (None) -- an infrastructure failure must not count as a wrong
     answer; an unclosed think trace asks for the +token retry."""
@@ -349,7 +347,9 @@ def _classify(
     return grade_sample(item, rec.get("content"), rec.get("reasoning")), False
 
 
-def _job(item: CorpusItem, repeat: int, *, max_tokens: int, seed_base: int, retry: bool = False) -> dict[str, Any]:
+def _job(
+    item: CorpusItem, repeat: int, *, max_tokens: int, seed_base: int, retry: bool = False
+) -> dict[str, Any]:
     """One run_generation job. Keys are ``<id>::<repeat>`` (the task convention);
     the retry appends RETRY_SUFFIX. top_p uses gen_top_p -- the closest existing
     knob (no passk_top_p; identical to run_generation's built-in default)."""
@@ -398,7 +398,9 @@ async def _label_pass(
         gen_rounds.append(stats)
 
     # -- main pass ---------------------------------------------------------
-    await run_round([_job(it, r, max_tokens=main_tokens, seed_base=seed_base) for it in items for r in range(k)])
+    await run_round(
+        [_job(it, r, max_tokens=main_tokens, seed_base=seed_base) for it in items for r in range(k)]
+    )
     repeats: dict[str, list[bool | None]] = {}
     pending: list[tuple[CorpusItem, int]] = []
     for it in items:
@@ -411,9 +413,9 @@ async def _label_pass(
         repeats[it.id] = reps
 
     # -- think-incomplete retry (once; still incomplete -> missing) ---------
-    await run_round([
-        _job(it, r, max_tokens=retry_tokens, seed_base=seed_base, retry=True) for it, r in pending
-    ])
+    await run_round(
+        [_job(it, r, max_tokens=retry_tokens, seed_base=seed_base, retry=True) for it, r in pending]
+    )
     for it, r in pending:
         graded, _ = _classify(it, records.get(f"{it.id}::{r}{RETRY_SUFFIX}"))
         repeats[it.id][r] = graded
@@ -444,9 +446,12 @@ async def _label_pass(
             if incomplete:
                 pending2.append((by_id[i], r))
             topup_reps[i].append(graded)
-    await run_round([
-        _job(it, r, max_tokens=retry_tokens, seed_base=seed_base, retry=True) for it, r in pending2
-    ])
+    await run_round(
+        [
+            _job(it, r, max_tokens=retry_tokens, seed_base=seed_base, retry=True)
+            for it, r in pending2
+        ]
+    )
     for it, r in pending2:
         graded, _ = _classify(it, records.get(f"{it.id}::{r}{RETRY_SUFFIX}"))
         topup_reps[it.id][r - k] = graded
@@ -458,7 +463,7 @@ async def _label_pass(
         all_reps = repeats[it.id] + topup_reps.get(it.id, [])
         valid = [x for x in all_reps if x is not None]
         rate = (sum(1 for x in valid if x) / len(valid)) if valid else None
-        notes = []
+        notes: list[str] = []
         base_missing = sum(1 for x in repeats[it.id] if x is None)
         if base_missing:
             notes.append(f"missing_repeats={base_missing}/{len(repeats[it.id])}")
@@ -513,7 +518,9 @@ def stage_entry(
         if labelable(it):
             eligible.append(it)
         else:
-            skipped["no_gold_answer" if it.answer_type in ("mcqa", "numeric") else it.answer_type] += 1
+            skipped[
+                "no_gold_answer" if it.answer_type in ("mcqa", "numeric") else it.answer_type
+            ] += 1
             buf.append(it)
         if len(buf) >= _WRITE_CHUNK:
             store.write_items(buf, out)
@@ -522,21 +529,27 @@ def stage_entry(
         store.write_items(buf, out)
 
     gen_rounds: list[dict[str, Any]] = []
+    outcomes: dict[str, tuple[float | None, str]] = {}
     if eligible:
         if gateway is None:
             raise StageError(
                 f"S12: {len(eligible)} labelable rows but no gateway -- construct "
                 "serving.Gateway(ServerHandle(model, port)) to run pass@k sampling"
             )
+        gen_path.parent.mkdir(
+            parents=True, exist_ok=True
+        )  # manifest write precedes run_generation's
         write_generation_manifest(gen_path, gateway.handle.model, "unknown", seed_base)
         outcomes = asyncio.run(
             _label_pass(
-                gateway, eligible, gen_path, seed_base=seed_base,
-                client_factory=client_factory, gen_rounds=gen_rounds,
+                gateway,
+                eligible,
+                gen_path,
+                seed_base=seed_base,
+                client_factory=client_factory,
+                gen_rounds=gen_rounds,
             )
         )
-    else:
-        outcomes = {}
 
     by_band: Counter[str] = Counter()
     per_source_rows: Counter[str] = Counter()
@@ -545,12 +558,14 @@ def stage_entry(
     buf = []
     for it in eligible:
         per_source_rows[it.source] += 1
-        rate, note = outcomes.get(it.id, (None, ""))
+        rate, note = outcomes[it.id]
         if rate is None:
             unrateable += 1
             meta = dict(it.meta)
             meta["difficulty_note"] = note or "unrateable: no pass rate"
-            buf.append(it.model_copy(update={"difficulty": None, "difficulty_band": None, "meta": meta}))
+            buf.append(
+                it.model_copy(update={"difficulty": None, "difficulty_band": None, "meta": meta})
+            )
             continue
         band = route_band(rate)
         by_band[band] += 1
@@ -598,7 +613,10 @@ def stage_entry(
             "labelled_rates": {
                 src: {
                     "_all": (sum(per_source_labelled[src].values()) / n) if n else 0.0,
-                    **{band: per_source_labelled[src][band] / n for band in sorted(per_source_labelled[src])},
+                    **{
+                        band: per_source_labelled[src][band] / n
+                        for band in sorted(per_source_labelled[src])
+                    },
                 }
                 for src, n in sorted(per_source_rows.items())
             },

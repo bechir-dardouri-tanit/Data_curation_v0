@@ -86,7 +86,7 @@ def verify_numeric(item: CorpusItem) -> bool:
 def run_answers(
     run_id: str,
     *,
-    input_stage: str = "06_decontam_sem",
+    input_stage: str = "08_concept",
     output_stage: str = "09_answers",
 ) -> StageManifest:
     started = utcnow()
