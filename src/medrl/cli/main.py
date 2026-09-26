@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 import typer
 from rich.console import Console
@@ -169,6 +169,31 @@ def model_convert(
 # ===============================================================================================
 # Data commands
 # ===============================================================================================
+
+
+# ===============================================================================================
+# Curation commands (S0-S15): thin wrappers over medrl.curation.runner.
+# ===============================================================================================
+
+
+@data_app.command("curate")
+def data_curate(
+    run_id: Annotated[Optional[str], typer.Option(help="Run id; defaults to cur-<timestamp>.")] = None,
+    stage: Annotated[Optional[list[str]], typer.Option(help="Stage(s) to run; repeatable; default all registered.")] = None,
+    list_stages: Annotated[bool, typer.Option("--list", help="List registered stages and exit.")] = False,
+) -> None:
+    """Run curation pipeline stages. Heavy outputs -> /scratch, manifests -> experiments/ (committed)."""
+    from medrl.curation import runner as curation_runner
+
+    if list_stages:
+        curation_runner.register_builtin_stages()
+        for name in sorted(curation_runner.STAGES):
+            print(name)
+        return
+    final_run_id = run_id or f"cur-{__import__('datetime').datetime.now(tz=__import__('datetime').timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    curation_runner.register_builtin_stages()
+    rc = curation_runner.run(final_run_id, stage or sorted(curation_runner.STAGES))
+    raise typer.Exit(rc)
 
 
 @data_app.command("prepare")
