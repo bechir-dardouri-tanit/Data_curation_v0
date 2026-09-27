@@ -362,6 +362,11 @@ def stage_entry(
     if not inp.is_dir():
         raise StageError(f"S2: input snapshot {inp} does not exist -- run {INPUT_STAGE} first")
     out.mkdir(parents=True, exist_ok=True)  # explicit dirs skip stage_dir's mkdir
+    # A re-run replaces its own snapshot (the runner contract): write_items
+    # APPENDS with continuing part numbers, so stale parts would double every
+    # row on disk before the invariant check could ever fire.
+    for stale in out.glob("part-*.parquet"):
+        stale.unlink()
     validate_check_registry()
 
     manifest = StageManifest(
@@ -387,7 +392,13 @@ def stage_entry(
     manifest.output_sha256 = store.content_sha256(out)
     manifest.flag_rates = tally.rates()
     manifest.notes = {"rows_flagged_any": tally.rows_with_any_flag}
-    assert manifest.rows_in == manifest.rows_out, "flags-not-deletes: S2 never drops"
+    if manifest.rows_in != manifest.rows_out:
+        # not a bare assert: under `python -O` it vanishes and a doubled/corrupt
+        # snapshot would publish silently
+        raise StageError(
+            f"S2: rows_in={manifest.rows_in} != rows_out={manifest.rows_out} "
+            "-- flags-not-deletes: S2 never drops"
+        )
     return manifest
 
 

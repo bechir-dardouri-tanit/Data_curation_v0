@@ -445,3 +445,21 @@ def test_flag_rates_math_on_mixed_batch(tmp_path):
     for unset in ("f_length", "f_truncated", "f_repetition", "f_encoding"):
         assert manifest.flag_rates[unset] == {"src_a": 0.0, "src_b": 0.0, "_all": 0.0}
     assert manifest.notes["rows_flagged_any"] == 3
+
+
+def test_rerun_replaces_own_snapshot_instead_of_appending(tmp_path: Any) -> None:
+    """Regression: stage_entry used to mkdir without clearing stale parts, and
+    write_items APPENDS with continuing part numbers -- a re-run (the documented
+    correction flow) doubled every row on disk, then crashed on rows_in/out."""
+    items = [_item(f"t:{i}") for i in range(5)]
+    inp = tmp_path / "01_normalize"
+    inp.mkdir(parents=True)
+    store.write_items(items, inp)
+    out = tmp_path / "02_structural"
+
+    m1 = structural.stage_entry("test-run", input_dir=inp, output_dir=out)
+    m2 = structural.stage_entry("test-run", input_dir=inp, output_dir=out)
+
+    assert m1.rows_out == m2.rows_out == 5, "stale parts must go before the re-write"
+    assert len(list(out.glob("part-*.parquet"))) == 1
+    assert m2.output_sha256 == m1.output_sha256

@@ -24,13 +24,20 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
 from medrl.curation import store
-from medrl.curation.schema import CorpusItem, StageManifest, utcnow
+from medrl.curation.schema import CorpusItem, StageError, StageManifest, utcnow
 from medrl.curation.stages.embed import bytes_to_vec
 from medrl.curation.thresholds import THRESHOLDS
+
+_BRUTE_FORCE_MAX_ITEMS = 50_000
+"""Self-join brute-force ceiling: exact O(n^2) is the small-corpus/unit-test
+path only. Above this a missing ann.usearch index is a StageError -- the
+fallback would be a weeks-long full-dim O(n^2) run at 2.5M rows, and an S5
+crash between part-write and index-build must not silently trigger it."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -61,10 +68,10 @@ def decide_contam(
 
 
 def _self_join_bruteforce(
-    items: list[CorpusItem], threshold: float
+    blobs: dict[str, bytes], threshold: float
 ) -> dict[str, tuple[str, float]]:
     """Exact O(n^2) self-join for small n; canonical = lower id in each pair."""
-    vecs = [(it.id, bytes_to_vec(it.embedding)) for it in items if it.embedding is not None]
+    vecs = [(iid, bytes_to_vec(blob)) for iid, blob in blobs.items()]
     vecs.sort(key=lambda t: t[0])  # lower id first -> seen set wins canonical role
     dup_of: dict[str, tuple[str, float]] = {}
     for i in range(len(vecs)):
@@ -85,29 +92,38 @@ def _self_join_ann(
     snapshot_dir: str, threshold: float
 ) -> dict[str, tuple[str, float]]:
     """usearch recall at truncated dims -> full-dim verification -> flags."""
-    items = {it.id: it for it in store.iter_items(__import__("pathlib").Path(snapshot_dir))
-             if it.embedding is not None}
-    ids = sorted(items)
-    index_path = __import__("pathlib").Path(snapshot_dir) / "ann.usearch"
+    # Only the fp16 blobs are held in RAM (not the full CorpusItem -- message
+    # text is the bulk of an item at 2.5M rows); candidates re-read vectors
+    # from this map instead of materializing the whole snapshot as objects.
+    blobs: dict[str, bytes] = {}
+    for it in store.iter_items(Path(snapshot_dir)):
+        if it.embedding is not None:
+            blobs[it.id] = it.embedding
+    ids = sorted(blobs)
+    index_path = Path(snapshot_dir) / "ann.usearch"
     if not index_path.exists():
-        return _self_join_bruteforce([items[i] for i in ids], threshold)
+        if len(ids) > _BRUTE_FORCE_MAX_ITEMS:
+            raise StageError(
+                f"S6: {len(ids)} embedded items but no ann.usearch index under "
+                f"{snapshot_dir} -- the exact O(n^2) fallback is refused at this "
+                "scale; re-run 05_embed to rebuild the index"
+            )
+        return _self_join_bruteforce(blobs, threshold)
     from usearch.index import Index
 
     index = Index(ndim=THRESHOLDS.embed_dim_index, metric="cos", dtype="f16")
     index.load(str(index_path))
     key_to_id = {int(k): v for k, v in json.loads(
         (index_path.parent / "ann_ids.json").read_text()).items()}
-    id_to_key = {v: k for k, v in key_to_id.items()}
     dup_of: dict[str, tuple[str, float]] = {}
     for iid in ids:
-        it = items[iid]
-        v_full = bytes_to_vec(it.embedding)
+        v_full = bytes_to_vec(blobs[iid])
         hits = index.search(v_full[: index.ndim], count=2)
         for hit in (hits if hits.shape else [hits]):
             other_id = key_to_id.get(int(hit["key"]))
             if other_id is None or other_id == iid:
                 continue
-            decision = decide_self(v_full, other_id, bytes_to_vec(items[other_id].embedding), threshold)
+            decision = decide_self(v_full, other_id, bytes_to_vec(blobs[other_id]), threshold)
             if decision.is_dup:
                 keep, drop = sorted((iid, other_id))
                 if drop not in dup_of or dup_of[drop][1] < decision.cosine:
@@ -140,12 +156,27 @@ def run_decontam_sem(
     dup_threshold = THRESHOLDS.semantic_dup_threshold
     dup_of = _self_join_ann(str(inp), dup_threshold)
 
-    bench: dict[str, list[tuple[str, np.ndarray]]] = {}
+    # The benchmark-join stacks every benchmark vector once (row order = the
+    # blob's benchmark/entry order, so ties break to the first benchmark, as
+    # the old per-pair loop did) and scores each corpus vector with one BLAS
+    # gemv against the normalized matrix. The previous per-pair Python cosine
+    # loop was O(corpus x benchmark) interpreted pairs: ~1.35e11 cosine calls
+    # (~156 core-hours) at 2.5M corpus rows x 54k benchmark questions.
+    bench_matrix: np.ndarray | None = None
+    bench_of_row: list[str] = []
     if bench_vectors_path:
         blob = json.loads(open(bench_vectors_path).read())
         npz = np.load(bench_vectors_path.replace(".json", ".npz"))
+        rows: list[np.ndarray] = []
         for benchmark, entries in blob.items():
-            bench[benchmark] = [(e["id"], npz[e["key"]]) for e in entries]
+            for e in entries:
+                rows.append(npz[e["key"]])
+                bench_of_row.append(benchmark)
+        if rows:
+            bench_matrix = np.stack(rows).astype(np.float32)
+            norms = np.linalg.norm(bench_matrix, axis=1)
+            norms[norms == 0.0] = 1.0
+            bench_matrix /= norms[:, None]
 
     per_bench_hits: dict[str, int] = {}
     n_dup = n_contam = 0
@@ -163,15 +194,13 @@ def run_decontam_sem(
             updates["dup_of"] = other
             updates["flags"] = it.flags.model_copy(update={"f_dup_semantic": True})
             n_dup += 1
-        if bench and it.embedding is not None and it.contam_benchmark is None:
+        if bench_matrix is not None and it.embedding is not None and it.contam_benchmark is None:
             v = bytes_to_vec(it.embedding)
-            best: tuple[str, float] | None = None
-            for benchmark, entries in bench.items():
-                for _bid, bv in entries:
-                    c = cosine(v, bv)
-                    if c >= THRESHOLDS.semantic_contam_threshold and (best is None or c > best[1]):
-                        best = (benchmark, c)
-            if best:
+            vnorm = float(np.linalg.norm(v))
+            sims = bench_matrix @ (v / vnorm) if vnorm else np.zeros(bench_matrix.shape[0])
+            j = int(np.argmax(sims))  # max-cosine pair; first row wins ties
+            if sims[j] >= THRESHOLDS.semantic_contam_threshold:
+                best = (bench_of_row[j], float(sims[j]))
                 updates["contam_benchmark"] = best[0]
                 flags = updates.get("flags", it.flags)
                 updates["flags"] = flags.model_copy(update={"f_contam_semantic": True})

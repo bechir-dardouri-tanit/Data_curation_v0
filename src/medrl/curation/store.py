@@ -54,7 +54,11 @@ _FLAG_FIELDS = list(Flags.model_fields)  # stable flag order, single definition 
 _ARROW_SCHEMA = pa.schema([
     ("id", pa.string()), ("source", pa.string()), ("lang", pa.string()),
     ("lang_score", pa.float64()), ("licence", pa.string()), ("redistributable", pa.bool_()),
-    ("messages", pa.list_(pa.struct([("role", pa.string()), ("content", pa.string())]))),
+    # messages as a JSON string, like tools/meta: a typed struct(role, content)
+    # column SILENTLY DROPS every other key a source carries (verified on
+    # pyarrow 25: OpenAI `name`/`tool_call_id` vanish on the round trip), and
+    # the schema contract is lossless with sources.
+    ("messages", pa.string()),
     ("thinking", pa.string()), ("tools", pa.string()), ("answer", pa.string()),
     ("answer_type", pa.string()), ("meta", pa.string()),
     # Flags as an explicit bool struct -- queryable per-flag from DuckDB.
@@ -70,6 +74,7 @@ _ARROW_SCHEMA = pa.schema([
 
 def _to_arrow_row(it: CorpusItem) -> dict:
     row = it.model_dump()
+    row["messages"] = json.dumps(row["messages"], ensure_ascii=False, default=str) if row["messages"] else None
     row["meta"] = json.dumps(row["meta"], sort_keys=True, default=str) if row["meta"] else None
     row["tools"] = json.dumps(row["tools"], default=str) if row["tools"] else None
     row["kg_triples"] = json.dumps([list(t) for t in row["kg_triples"]]) if row["kg_triples"] else None
@@ -84,6 +89,12 @@ def _from_arrow_row(row: dict) -> CorpusItem:
     for name in _FLAG_FIELDS:
         flags[name] = row.pop("flags_" + name.removeprefix("f_")) or False
     row["flags"] = flags
+    msg = row.get("messages")
+    if isinstance(msg, str):          # current writer: JSON string
+        row["messages"] = json.loads(msg) if msg else []
+    elif msg is None:
+        row["messages"] = []
+    # else: legacy struct-decoded list-of-dicts -- already the right shape
     row["meta"] = json.loads(row["meta"]) if row.get("meta") else {}
     row["tools"] = json.loads(row["tools"]) if row.get("tools") else None
     row["kg_triples"] = [tuple(t) for t in json.loads(row["kg_triples"])] if row.get("kg_triples") else []

@@ -522,3 +522,64 @@ def test_phase5_recipe_fixed_counts_and_seed(tmp_path: Path) -> None:
     assert "ii_medical_reasoning_sft:r5" not in _jsonl_ids(ids1)
     # setseed(0.42) pins the draw for a given duckdb build + thread count
     assert _jsonl_ids(ids1) == _jsonl_ids(ids2)
+
+
+# --------------------------------------------------------------------------
+# Determinism at parallel-scan scale (the tiny fixture above can never fan out;
+# the 13-row determinism guarantee did not transfer to real corpora).
+# --------------------------------------------------------------------------
+
+
+def test_execute_spec_seeded_draw_is_deterministic_at_scale(tmp_path: Path) -> None:
+    """Regression: setseed() reproducibility is per-connection AND per-scan.
+    With default threads, the same seeded recipe over the same 2M-row parquet
+    produced a different selection on every fresh connection (6/6 distinct
+    measured on duckdb 1.5.5) -- the phase2/phase3 training sets silently
+    changed between runs. _execute_spec pins threads=1; at a row count that
+    actually exercises scan fan-out, runs must be identical."""
+    from medrl.curation.stages import mixture as mixture_mod
+
+    p = tmp_path / "big.parquet"
+    con = duckdb.connect()
+    con.execute(
+        f"COPY (SELECT 'id' || i AS id, 'src' AS source FROM range(2000000) tbl(i)) "
+        f"TO '{p}' (FORMAT PARQUET)"
+    )
+    con.close()
+
+    script = "SELECT setseed(0.42);\nSELECT id FROM corpus ORDER BY random() LIMIT 10;"
+    draws = {
+        tuple(row["id"] for row in mixture_mod._execute_spec([p], script)[1])
+        for _ in range(3)
+    }
+    assert len(draws) == 1, f"seeded draw differed across runs: {len(draws)} distinct results"
+
+
+def test_runner_mixture_default_saves_every_phase_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the runner's default 15_mixture ran phases 1-5 but returned
+    only the last manifest to _wrap -- 4 of 5 mixture outputs had no audit
+    record (no config/row counts/hashes), and recipe drift in them was
+    undetectable after the fact."""
+    from medrl.curation import runner as runner_mod
+
+    inp = _recipe_corpus(tmp_path)
+    experiments = tmp_path / "experiments"
+    monkeypatch.setattr(store, "EXPERIMENTS_ROOT", experiments)
+    monkeypatch.setattr(store, "SCRATCH_ROOT", tmp_path / "scratch")
+
+    manifest = runner_mod.run_mixture_default("run-t", sql_dir=RECIPE_DIR, input_dir=inp)
+
+    # the returned manifest is phase5's, still unsealed (that is _wrap's job)
+    assert manifest.stage == "15_mixture_phase5"
+    assert manifest.finished_at is None
+    # phases 1-4 each have their own sealed audit record
+    for phase in ("phase1", "phase2", "phase3", "phase4"):
+        p = experiments / "run-t" / f"15_mixture_{phase}.manifest.json"
+        assert p.is_file(), f"missing audit record for {phase}"
+        blob = json.loads(p.read_text())
+        assert blob["rows_out"] > 0
+        assert blob["finished_at"] is not None
+    # phase5's file lands when _wrap seals + saves the returned manifest
+    assert not (experiments / "run-t" / "15_mixture_phase5.manifest.json").exists()

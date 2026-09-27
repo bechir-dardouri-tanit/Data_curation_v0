@@ -228,15 +228,26 @@ def run_decontam_ngram(
     """
     inp = input_dir if input_dir is not None else store.stage_dir(run_id, INPUT_STAGE)
     out = output_dir if output_dir is not None else store.stage_dir(run_id, STAGE_NAME)
+    if not inp.is_dir():
+        raise StageError(f"S4: input snapshot {inp} does not exist -- run {INPUT_STAGE} first")
+    if not any(inp.glob("part-*.parquet")):
+        # the S2/S8 convention: a silent zero-row snapshot would overwrite a
+        # good one and look like a successful no-op pass (canary included)
+        raise StageError(f"S4: input snapshot {inp} is empty -- run {INPUT_STAGE} first")
     # store.stage_dir mkdirs its own default; an injected (subset/test) dir must too.
-    if input_dir is not None:
-        inp.mkdir(parents=True, exist_ok=True)
     if output_dir is not None:
         out.mkdir(parents=True, exist_ok=True)
     names = _resolve_benchmarks(benchmarks)
     if index is None:
         index = build_question_index(names)
     canary = run_canary(index)
+
+    # A re-run replaces its own snapshot (the runner contract): write_items
+    # APPENDS with continuing part numbers, so stale parts would double every
+    # row on disk and then trip the flags-not-deletes check. Reset only after
+    # the guards above, so a failed precheck cannot wipe a good snapshot.
+    for stale in out.glob("part-*.parquet"):
+        stale.unlink()
 
     per_source_total: Counter[str] = Counter()
     per_source_flagged: Counter[str] = Counter()
@@ -307,7 +318,13 @@ def stage_entry(
         flag_rates={"f_contam_ngram": result["flag_rates"]},
         notes={"per_benchmark_hits": result["per_benchmark_hits"], "canary": result["canary"]},
     )
-    assert manifest.rows_in == manifest.rows_out, "flags-not-deletes: S4 never drops"
+    if manifest.rows_in != manifest.rows_out:
+        # not a bare assert: under `python -O` it vanishes and a doubled/corrupt
+        # snapshot would publish silently
+        raise StageError(
+            f"S4: rows_in={manifest.rows_in} != rows_out={manifest.rows_out} "
+            "-- flags-not-deletes: S4 never drops"
+        )
     return manifest
 
 

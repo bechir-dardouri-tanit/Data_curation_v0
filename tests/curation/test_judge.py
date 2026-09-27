@@ -323,3 +323,30 @@ def test_missing_axes_file_raises(tmp_path: Path) -> None:
             output_dir=tmp_path / "out",
             axes_path=tmp_path / "nope.yaml",
         )
+
+
+def test_rubric_change_invalidates_cached_verdicts_and_prior_q(tmp_path: Path) -> None:
+    """Regression: cache keys were only `<id>::<axis>` and nothing compared the
+    cached rubric to the current one -- a re-run after editing judge_axes.yaml
+    or swapping the judge silently reused verdicts graded under the old rubric
+    (and fully-judged rows were never re-asked at all via the prior-q harvest)."""
+    inp = tmp_path / "in"
+    inp.mkdir()
+    store.write_items([_item("s1:a"), _item("s1:b")], inp)
+
+    yaml_v1 = tmp_path / "axes_v1.yaml"
+    yaml_v1.write_text(TEST_AXES_YAML)
+    gw1 = FakeGateway(lambda messages: '{"met": ["coh-heavy", "coh-light", "clin-only", "fmt-a", "fmt-b"]}')
+    stage_entry("r", input_dir=inp, output_dir=tmp_path / "out", axes_path=yaml_v1, gateway=gw1)
+    n_v1_prompts = len(gw1.user_prompts)
+    assert n_v1_prompts == 6  # 2 rows x 3 axes
+
+    yaml_v2 = tmp_path / "axes_v2.yaml"
+    yaml_v2.write_text(TEST_AXES_YAML.replace("weight: 3.0", "weight: 5.0"))
+    gw2 = FakeGateway(lambda messages: '{"met": []}')
+    manifest2 = stage_entry("r", input_dir=inp, output_dir=tmp_path / "out", axes_path=yaml_v2, gateway=gw2)
+
+    # every row re-asked under the new rubric, not answered from cache
+    assert len(gw2.user_prompts) == n_v1_prompts
+    assert manifest2.notes["gen"]["resumed"] == 0
+    assert manifest2.notes["axis_pass_rates"]["q_coherence"]["_all"] == 0.0

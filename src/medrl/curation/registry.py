@@ -12,6 +12,7 @@ a no-op and the registry says so, rather than inheriting a phantom step).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Iterator
@@ -116,6 +117,10 @@ def acquire(plan: SourcePlan, out_dir: Path) -> SourceRecord:
             plan.hf_id,
             repo_type="dataset",
             allow_patterns=["*.jsonl", "*.json", "*.parquet"],
+            # Pin to the revision the ledger is about to record: floating on
+            # latest main would let an upstream force-push between S0 and S1
+            # make hf_revision/content_sha256 describe bytes nobody read.
+            revision=meta["sha"],
         )
     )
 
@@ -127,11 +132,15 @@ def acquire(plan: SourcePlan, out_dir: Path) -> SourceRecord:
     size_bytes = sum(p.stat().st_size for p in data_files)
 
     # Content hash over the downloaded files in sorted order -- cheap, and the
-    # row-level hash comes at S1 where rows are materialized.
-    fh = __import__("hashlib").sha256()
+    # row-level hash comes at S1 where rows are materialized. Chunked (1 MiB)
+    # so multi-GB shards are hashed too: a size cutoff here once hashed those
+    # files as a constant placeholder, so a corrupted re-download verified clean.
+    fh = hashlib.sha256()
     for p in data_files:
         fh.update(p.name.encode())
-        fh.update(p.read_bytes() if p.stat().st_size < (1 << 30) else b"<large>")
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                fh.update(chunk)
 
     licence = plan.licence
     licence_source = "plan-registry"
@@ -191,10 +200,24 @@ def rows_sha256_placeholder(records: list[SourceRecord]) -> str:
 
 
 def iter_source_files(record: SourceRecord) -> Iterator[Path]:
-    """Yield the downloaded data files for one acquired source."""
+    """Yield the downloaded data files for one acquired source.
+
+    Same revision + allow_patterns as :func:`acquire`: a floating revision
+    would let S1 read different bytes than the ones S0 hashed, and a wider
+    file set would read data the ledger never saw (a repo shipping both .json
+    and .jsonl exports of the same data would be read twice, duplicating every
+    row under distinct row-position ids).
+    """
     from huggingface_hub import snapshot_download
 
-    path = Path(snapshot_download(record.url_or_hf_id, repo_type="dataset"))
+    path = Path(
+        snapshot_download(
+            record.url_or_hf_id,
+            repo_type="dataset",
+            allow_patterns=["*.jsonl", "*.json", "*.parquet"],
+            revision=record.hf_revision,
+        )
+    )
     for p in sorted(path.rglob("*")):
         if p.suffix in {".jsonl", ".json", ".parquet"}:
             yield p

@@ -50,6 +50,7 @@ none). The value is equal (0.5) and the borrow is recorded in the manifest notes
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import zlib
 from collections import defaultdict
@@ -227,11 +228,34 @@ def _stable_seed(key: str) -> int:
     return zlib.crc32(key.encode("utf-8"))
 
 
+def verdict_key(
+    item: CorpusItem,
+    axis: str,
+    criteria: Sequence[Criterion],
+    *,
+    model: str,
+    retry: bool = False,
+) -> str:
+    """Resume-cache key for one (item, axis): id + axis + a digest of (model, prompt).
+
+    The digest binds a cached reply to the rubric and model that produced it.
+    Keying on id+axis alone made a re-run after editing judge_axes.yaml (the
+    scheduled B7 calibration) or swapping JUDGE_MODEL silently reuse verdicts
+    graded under the old rubric -- and a renamed criterion id would score every
+    previously-passing row 0 via the empty met-id intersection. Any rubric,
+    model, or prompt change now misses the cache and re-asks.
+    """
+    prompt = build_axis_prompt(item, criteria)
+    digest = hashlib.blake2b((model + "\x00" + prompt).encode("utf-8"), digest_size=6).hexdigest()
+    return f"{item.id}::{axis}::{digest}" + (RETRY_KEY_SUFFIX if retry else "")
+
+
 def _judge_jobs(
     item: CorpusItem,
     missing: Sequence[str],
     axes: Mapping[str, tuple[Criterion, ...]],
     *,
+    model: str = JUDGE_MODEL,
     retry: bool = False,
 ) -> list[dict[str, Any]]:
     """``run_generation`` job dicts for one item's missing axes -- one prompt per axis.
@@ -240,10 +264,9 @@ def _judge_jobs(
     resamples itself between runs cannot be calibrated.
     """
     system = _SYSTEM + _RETRY_NOTE if retry else _SYSTEM
-    suffix = RETRY_KEY_SUFFIX if retry else ""
     jobs: list[dict[str, Any]] = []
     for axis in missing:
-        key = f"{item.id}::{axis}{suffix}"
+        key = verdict_key(item, axis, axes[axis], model=model, retry=retry)
         jobs.append(
             {
                 "key": key,
@@ -362,15 +385,6 @@ def stage_entry(
     if not inp.is_dir():
         raise StageError(f"S11: input snapshot {inp} does not exist -- run {INPUT_STAGE} first")
     out.mkdir(parents=True, exist_ok=True)
-    # Runner resume contract: a re-run replaces its own snapshot. Before replacing it,
-    # harvest the previous run's verdicts by row id (resume layer 1); the verdict cache
-    # is stage state too and survives so finished rows are never re-billed.
-    prior_q: dict[str, tuple[int | None, int | None, int | None]] = {}
-    if any(out.glob("part-*.parquet")):
-        for done in store.iter_items(out):
-            prior_q[done.id] = (done.q_coherence, done.q_clinical, done.q_format)
-    for stale in out.glob("part-*.parquet"):
-        stale.unlink()
 
     axes_file = axes_path if axes_path is not None else DEFAULT_AXES_FILE
     if not axes_file.is_file():
@@ -379,6 +393,37 @@ def stage_entry(
     threshold = THRESHOLDS.band_sft1_low if pass_threshold is None else pass_threshold
     gw = gateway if gateway is not None else Gateway(ServerHandle(model=model, port=port))
     vpath = verdicts_path if verdicts_path is not None else out / VERDICTS_FILENAME
+    axes_sha256 = store.source_sha256(axes_file)
+
+    # Rubric provenance: cached verdicts and the previous snapshot's q_* values
+    # are only valid for the axes + model that produced them. A sidecar beside
+    # the verdicts file records the rubric; when it changed, the stale verdict
+    # file is rotated aside and the prior-q harvest is skipped, so a re-run
+    # after a judge_axes.yaml edit or a judge swap actually re-asks every row
+    # instead of silently reporting verdicts graded under the old rubric.
+    rubric = {"axes_sha256": axes_sha256, "model": model}
+    meta_path = vpath.with_name(vpath.name + ".meta.json")
+    rubric_changed = False
+    if meta_path.exists():
+        try:
+            rubric_changed = json.loads(meta_path.read_text()) != rubric
+        except json.JSONDecodeError:
+            rubric_changed = True
+    if rubric_changed and vpath.exists():
+        rotated = vpath.with_name(f"{vpath.name}.stale-{utcnow().strftime('%Y%m%dT%H%M%S')}")
+        vpath.rename(rotated)
+        log.warning("S11: axes/model changed since the last run; rotated stale verdicts to %s", rotated)
+    meta_path.write_text(json.dumps(rubric))
+
+    # Runner resume contract: a re-run replaces its own snapshot. Before replacing it,
+    # harvest the previous run's verdicts by row id (resume layer 1); the verdict cache
+    # is stage state too and survives so finished rows are never re-billed.
+    prior_q: dict[str, tuple[int | None, int | None, int | None]] = {}
+    if not rubric_changed and any(out.glob("part-*.parquet")):
+        for done in store.iter_items(out):
+            prior_q[done.id] = (done.q_coherence, done.q_clinical, done.q_format)
+    for stale in out.glob("part-*.parquet"):
+        stale.unlink()
 
     manifest = StageManifest(
         run_id=run_id,
@@ -388,7 +433,7 @@ def stage_entry(
             "input_dir": str(inp),
             "output_dir": str(out),
             "axes_path": str(axes_file),
-            "axes_sha256": store.source_sha256(axes_file),
+            "axes_sha256": axes_sha256,
             "axes": {axis: [c.id for c in criteria] for axis, criteria in axes.items()},
             "model": model,
             "base_url": gw.handle.base_url,
@@ -424,7 +469,14 @@ def stage_entry(
             out_buf.clear()
 
     def _round(jobs: list[dict[str, Any]]) -> None:
-        """One run_generation pass, then merge the lines it appended."""
+        """One run_generation pass, then merge the lines it appended.
+
+        One ``asyncio.run`` per chunk is safe here because the Gateway keeps its
+        loop-bound admission primitive per loop (serving.Gateway._loop_gate):
+        loop-bound asyncio objects raise ``is bound to a different event loop``
+        when contended cross-loop, which is exactly what a shared semaphore
+        did at chunk 3+.
+        """
         nonlocal offset
         if not jobs:
             return
@@ -436,21 +488,25 @@ def stage_entry(
     def _close_chunk() -> None:
         """Generate, retry, resolve and emit the chunk's judged rows."""
         nonlocal n_retry_jobs
+
+        def key_of(item: CorpusItem, axis: str, *, retry: bool = False) -> str:
+            return verdict_key(item, axis, axes[axis], model=model, retry=retry)
+
         if not chunk:
             return
-        jobs = [j for item, missing in chunk for j in _judge_jobs(item, missing, axes)]
+        jobs = [j for item, missing in chunk for j in _judge_jobs(item, missing, axes, model=model)]
         _round(jobs)
         retries: list[dict[str, Any]] = []
         for item, missing in chunk:
             for axis in missing:
-                if _needs_retry(verdicts, f"{item.id}::{axis}"):
-                    retries.extend(_judge_jobs(item, [axis], axes, retry=True))
+                if _needs_retry(verdicts, key_of(item, axis)):
+                    retries.extend(_judge_jobs(item, [axis], axes, model=model, retry=True))
         n_retry_jobs += len(retries)
         _round(retries)
         for item, missing in chunk:
             updates: dict[str, int] = {}
             for axis in missing:
-                met, parseable = _resolve_met(verdicts, f"{item.id}::{axis}", axes[axis])
+                met, parseable = _resolve_met(verdicts, key_of(item, axis), axes[axis])
                 if not parseable:
                     zeros[axis] += 1
                 updates[AXIS_TO_Q[axis]] = axis_verdict(met, axes[axis], threshold)
@@ -512,7 +568,13 @@ def stage_entry(
         "verdicts_cached": len(verdicts),
         "pass_threshold_source": _THRESHOLD_SOURCE,
     }
-    assert manifest.rows_in == manifest.rows_out, "flags-not-deletes: S11 never drops"
+    if manifest.rows_in != manifest.rows_out:
+        # not a bare assert: under `python -O` it vanishes and a doubled/corrupt
+        # snapshot would publish silently
+        raise StageError(
+            f"S11: rows_in={manifest.rows_in} != rows_out={manifest.rows_out} "
+            "-- flags-not-deletes: S11 never drops"
+        )
     log.info(
         "S11 %s: judged=%d skipped=%d flagged=%d pass_rates=%s",
         run_id,
@@ -541,4 +603,5 @@ __all__ = [
     "load_axes",
     "parse_verdict",
     "stage_entry",
+    "verdict_key",
 ]

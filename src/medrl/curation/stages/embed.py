@@ -10,9 +10,13 @@ Storage: full-dim fp16 bytes on the item (``embedding`` column) + a usearch HNSW
 index over MRL-truncated dims for ANN recall; S6 re-scores candidates at full
 resolution (recall-at-truncated / precision-at-full, per the plan).
 
-Resume: items whose ``embedding`` is already set are skipped, so an interrupted
-pass continues where it stopped. Output is one snapshot dir; chunks append
-disjoint part files (write_items dedups within a call, chunks partition ids).
+Resume: an interrupted pass continues where it stopped. The only writer of the
+``embedding`` column is this stage, so partial progress lives in the previous
+05 output; on entry its already-embedded ids are harvested and matched items
+are pre-filled during the stream -- they are written through without an HTTP
+embed, and ``already_embedded`` in the manifest notes counts them. Output is
+one snapshot dir; the harvest happens BEFORE reset_dir clears it (the reset
+used to delete exactly the progress the resume contract promised to keep).
 """
 
 from __future__ import annotations
@@ -94,7 +98,16 @@ def run_embed(
     """Embed every un-embedded item of the input snapshot; write snapshot + ANN index."""
     started = utcnow()
     inp = store.stage_dir(run_id, input_stage)
-    out = store.reset_dir(store.stage_dir(run_id, output_stage))
+    out_dir = store.stage_dir(run_id, output_stage)
+    # Harvest the previous pass's embeddings BEFORE reset_dir wipes them: those
+    # part files are the only place partial progress survives, and deleting
+    # them first turned "resume" into a silent full re-embed at the next run.
+    embedded_prev: dict[str, bytes] = {}
+    if out_dir.resolve() != Path(inp).resolve() and any(out_dir.glob("part-*.parquet")):
+        for done in store.iter_items(out_dir):
+            if done.embedding is not None:
+                embedded_prev[done.id] = done.embedding
+    out = store.reset_dir(out_dir)
     manifest = StageManifest(
         run_id=run_id, stage=output_stage, started_at=started,
         config={"model": model, "base_url": base_url,
@@ -113,6 +126,10 @@ def run_embed(
             if limit is not None and i >= limit:
                 return
             n_total += 1
+            if it.embedding is None and it.id in embedded_prev:
+                n_already += 1
+                yield it.model_copy(update={"embedding": embedded_prev[it.id]})
+                continue
             if it.embedding is not None:
                 n_already += 1
             yield it
@@ -120,28 +137,35 @@ def run_embed(
     pending: list[CorpusItem] = []
 
     def flush(chunk: list[CorpusItem]) -> None:
-        nonlocal pending
-        if chunk:
-            store.write_items(chunk, out)
-            pending = []
+        """Embed the chunk's un-embedded items, then write the whole chunk."""
+        nonlocal dim, n_embedded, pending
+        if not chunk:
+            return
+        missing = [x for x in chunk if x.embedding is None]
+        if missing:
+            vecs = asyncio.run(_embed_all(base_url, model, [_question_of(x) for x in missing]))
+            dim = dim or int(vecs[0].shape[0])
+            n_embedded += len(missing)
+            got = {x.id: fp16_bytes(v) for x, v in zip(missing, vecs, strict=True)}
+            chunk = [
+                x if x.embedding is not None else x.model_copy(update={"embedding": got[x.id]})
+                for x in chunk
+            ]
+        store.write_items(chunk, out)
+        pending = []
 
     it: CorpusItem | None
     for it in stream_input():
-        if it.embedding is not None:
-            flush(pending)
-            store.write_items([it], out)  # already-embedded items pass through
-            continue
         pending.append(it)
         if len(pending) >= CHUNK_ITEMS:
-            vecs = asyncio.run(_embed_all(base_url, model, [_question_of(x) for x in pending]))
-            dim = dim or int(vecs[0].shape[0])
-            n_embedded += len(pending)
-            flush([x.model_copy(update={"embedding": fp16_bytes(v)}) for x, v in zip(pending, vecs)])
-    if pending:
-        vecs = asyncio.run(_embed_all(base_url, model, [_question_of(x) for x in pending]))
-        dim = dim or int(vecs[0].shape[0])
-        n_embedded += len(pending)
-        flush([x.model_copy(update={"embedding": fp16_bytes(v)}) for x, v in zip(pending, vecs)])
+            flush(pending)
+    flush(pending)
+
+    # a fully-resumed pass embeds nothing, so the dim never got observed this
+    # run -- take it from the harvested blobs (the index must not silently
+    # build at the THRESHOLDS default and disagree with the stored vectors)
+    if dim is None and embedded_prev:
+        dim = int(bytes_to_vec(next(iter(embedded_prev.values()))).shape[0])
 
     index_path = _build_usearch_index(out, dim_hint=dim)
     manifest.rows_in = n_total
@@ -151,7 +175,11 @@ def run_embed(
     manifest.notes = {"embedded": n_embedded, "already_embedded": n_already,
                       "wall_s": round(time.monotonic() - t0, 1),
                       "ann_index": str(index_path), "dim": dim}
-    assert manifest.rows_in == manifest.rows_out
+    if manifest.rows_in != manifest.rows_out:
+        raise StageError(
+            f"S5: rows_in={manifest.rows_in} != rows_out={manifest.rows_out} "
+            "-- flags-not-deletes: S5 never drops"
+        )
     return manifest
 
 

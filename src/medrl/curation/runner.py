@@ -61,6 +61,37 @@ def run(run_id: str, stages: list[str]) -> int:
     return 0 if ok else 1
 
 
+MIXTURE_SQL_DIR = Path("/root/medrl/configs/curation/mixtures")
+MIXTURE_PHASES = ("phase1", "phase2", "phase3", "phase4", "phase5")
+
+
+def run_mixture_default(
+    run_id: str,
+    *,
+    sql_dir: Path | str = MIXTURE_SQL_DIR,
+    input_dir: Path | None = None,
+) -> StageManifest:
+    """Execute the full curriculum phase1..phase5 in order when invoked bare.
+
+    Phase selection is a runner-level choice. Every phase's manifest is its own
+    audit record (recipe sql text + sha, per-source counts, content hashes), so
+    each is sealed + saved as it completes -- returning only the last would
+    leave phases 1-4 with output snapshots but no manifest, and a recipe drift
+    in them would be undetectable after the fact. The last manifest is returned
+    unsealed for _wrap's seal/save, exactly like a single-stage entry.
+    """
+    last: StageManifest | None = None
+    from medrl.curation.stages import mixture as mixture_run
+
+    for phase in MIXTURE_PHASES:
+        manifest = mixture_run.run_mixture(run_id, sql_dir=sql_dir, out_name=phase, input_dir=input_dir)
+        if phase != MIXTURE_PHASES[-1]:
+            store.save_manifest(store.seal_manifest(manifest))
+        last = manifest
+    assert last is not None
+    return last
+
+
 def register_builtin_stages() -> None:
     """Wire stage modules into STAGES. Idempotent; called by main()."""
     from medrl.curation import registry as registry_mod
@@ -74,7 +105,6 @@ def register_builtin_stages() -> None:
         difficulty,
         embed,
         judge,
-        mixture,
         normalize,
         structural,
     )
@@ -91,22 +121,7 @@ def register_builtin_stages() -> None:
     STAGES.setdefault("11_judge", judge.stage_entry)
     STAGES.setdefault("12_difficulty", difficulty.stage_entry)
     STAGES.setdefault("13_coverage", coverage.stage_entry)
-
-    def _mixture_default(run_id: str):
-        # Phase selection is a runner-level choice; the default executes the
-        # full curriculum phase1..phase5 in order when invoked bare.
-        manifests = []
-        for phase in ("phase1", "phase2", "phase3", "phase4", "phase5"):
-            manifests.append(
-                mixture.run_mixture(
-                    run_id,
-                    sql_dir=Path("/root/medrl/configs/curation/mixtures"),
-                    out_name=phase,
-                )
-            )
-        return manifests[-1]
-
-    STAGES.setdefault("15_mixture", _mixture_default)
+    STAGES.setdefault("15_mixture", run_mixture_default)
 
 
 def main(argv: list[str] | None = None) -> int:

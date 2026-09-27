@@ -465,3 +465,32 @@ def test_stage_entry_unlabelable_only_needs_no_gateway(tmp_path: Any):
     assert manifest.rows_out == 1
     assert manifest.notes["gen_rounds"] == []
     assert manifest.notes["labelled"] == 0
+
+
+def test_stage_entry_rerun_replaces_own_snapshot_but_keeps_resume(
+    tmp_path: Any, small_k: None
+):
+    """Regression: stage_entry only mkdir'd its output; write_items APPENDS with
+    continuing part numbers, so the documented re-run doubled the snapshot and
+    then died on rows_out != rows_in (an AssertionError the runner does not
+    catch). generations.jsonl must survive the reset -- it is the resume cache."""
+    inp = _write_input(tmp_path, _all_items())
+    out = tmp_path / "12_difficulty"
+    gen = tmp_path / "gen" / "generations.jsonl"
+
+    first = difficulty.stage_entry(
+        "run-x", input_dir=inp, output_dir=out,
+        gateway=_gateway(), generation_out=gen, seed_base=0, client_factory=_factory(),
+    )
+    gen_lines_after_first = len(gen.read_text().splitlines())
+
+    second = difficulty.stage_entry(
+        "run-x", input_dir=inp, output_dir=out,
+        gateway=_gateway(), generation_out=gen, seed_base=0, client_factory=_factory(),
+    )
+
+    assert first.rows_out == second.rows_out == 8, "stale parts must go before the re-write"
+    assert second.output_sha256 == first.output_sha256
+    # resume cache survived and was reused: no new generation lines appended
+    assert len(gen.read_text().splitlines()) == gen_lines_after_first
+    assert second.notes["gen_rounds"][0]["ran"] == 0

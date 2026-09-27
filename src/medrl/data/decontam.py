@@ -36,6 +36,27 @@ CONTAMINATION_THRESHOLD = 0.8  # N-gram overlap threshold
 EMBEDDING_THRESHOLD = 0.9  # Cosine similarity threshold
 DEFAULT_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
+_ENCODER_CACHE: dict[str, Any] = {}
+
+
+def _cached_encoder(model: str) -> Any:
+    """One SentenceTransformer per model name, loaded once per process.
+
+    compute_embeddings() instantiates SentenceTransformer from scratch on every
+    call (a multi-second weight load); check_contamination() encodes per
+    document, so the embedding path re-loaded the model once per (doc,
+    benchmark) query -- days of pure weight-loading at 10k docs x 12
+    benchmarks. Same encode() defaults as compute_embeddings, so vectors are
+    identical.
+    """
+    encoder = _ENCODER_CACHE.get(model)
+    if encoder is None:
+        from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+
+        encoder = SentenceTransformer(model)
+        _ENCODER_CACHE[model] = encoder
+    return encoder
+
 
 # --------------------------------------------------------------------------------------
 # Benchmark index for decontamination
@@ -210,9 +231,11 @@ class BenchmarkIndex:
         if self.embeddings is None:
             return []
 
-        # Compute query embedding
-        result = compute_embeddings([text], model=self._embedding_model or DEFAULT_EMBED_MODEL)
-        query_emb = result.embeddings[0]
+        # Compute query embedding (cached encoder: one weight load per process,
+        # not one per query -- see _cached_encoder)
+        query_emb = _cached_encoder(self._embedding_model or DEFAULT_EMBED_MODEL).encode(
+            [text], show_progress_bar=False
+        )[0]
 
         # Compute similarities
         similarities = self.embeddings @ query_emb
@@ -327,26 +350,75 @@ def check_contamination(
 
     # Check each document
     contaminated_doc_ids = set()
+    wanted_benchmarks = set(benchmarks)
 
     for doc in docs:
         doc_contaminated = False
 
-        for bench in benchmarks:
-            # N-gram check
-            ngram_hits = benchmark_index.query_ngram(
-                doc.text,
-                threshold=ngram_threshold,
+        # One unfiltered query per document, partitioned by the hit's own
+        # benchmark. The old loop re-queried once per benchmark: each call
+        # re-hashed the document and re-scanned the whole candidate set, so 12
+        # benchmarks cost 12x the hot path for exactly the same hit set (the
+        # benchmark filter is applied per candidate after retrieval anyway).
+        ngram_hits = benchmark_index.query_ngram(
+            doc.text,
+            threshold=ngram_threshold,
+        )
+
+        for key, overlap in ngram_hits:
+            item = benchmark_index.items[key]
+            bench = item.benchmark
+            if bench not in wanted_benchmarks:
+                continue  # benchmark_filter parity with the per-benchmark loop
+            hit = ContaminationHit(
+                train_id=doc.id,
                 benchmark=bench,
+                benchmark_item_id=item.item_id,
+                ngram_overlap=overlap,
+                ngram_threshold=ngram_threshold,
+            )
+            result.hits.append(hit)
+            result.reports[bench].hits.append(hit)
+            doc_contaminated = True
+
+            if doc.id not in contaminated_doc_ids:
+                result.contaminated_docs += 1
+                contaminated_doc_ids.add(doc.id)
+
+        # Optional embedding check (only if not already contaminated by ngrams)
+        if check_embeddings and benchmark_index.embeddings is not None:
+            # seen (train_id, benchmark_item_id) pairs so far -- replacing the
+            # any() scan over every accumulated hit, which was O(total hits)
+            # per embedding candidate
+            seen_pairs = {(h.train_id, h.benchmark_item_id) for h in result.hits}
+
+            # One unfiltered query per document, partitioned by benchmark
+            # (identical hit set; the encoder is cached, and this encodes the
+            # document once instead of once per benchmark)
+            embed_hits = benchmark_index.query_embedding(
+                doc.text,
+                threshold=embedding_threshold,
             )
 
-            for key, overlap in ngram_hits:
+            for key, similarity in embed_hits:
                 item = benchmark_index.items[key]
+                bench = item.benchmark
+                if bench not in wanted_benchmarks:
+                    continue
+
+                # Skip if already found via ngrams
+                if (doc.id, item.item_id) in seen_pairs:
+                    continue
+                seen_pairs.add((doc.id, item.item_id))
+
                 hit = ContaminationHit(
                     train_id=doc.id,
                     benchmark=bench,
                     benchmark_item_id=item.item_id,
-                    ngram_overlap=overlap,
+                    ngram_overlap=0.0,
                     ngram_threshold=ngram_threshold,
+                    embedding_similarity=similarity,
+                    embedding_threshold=embedding_threshold,
                 )
                 result.hits.append(hit)
                 result.reports[bench].hits.append(hit)
@@ -355,39 +427,6 @@ def check_contamination(
                 if doc.id not in contaminated_doc_ids:
                     result.contaminated_docs += 1
                     contaminated_doc_ids.add(doc.id)
-
-        # Optional embedding check (only if not already contaminated by ngrams)
-        if check_embeddings and benchmark_index.embeddings is not None:
-            for bench in benchmarks:
-                embed_hits = benchmark_index.query_embedding(
-                    doc.text,
-                    threshold=embedding_threshold,
-                    benchmark=bench,
-                )
-
-                for key, similarity in embed_hits:
-                    # Skip if already found via ngrams
-                    if any(h.train_id == doc.id and h.benchmark_item_id == benchmark_index.items[key].item_id
-                          for h in result.hits):
-                        continue
-
-                    item = benchmark_index.items[key]
-                    hit = ContaminationHit(
-                        train_id=doc.id,
-                        benchmark=bench,
-                        benchmark_item_id=item.item_id,
-                        ngram_overlap=0.0,
-                        ngram_threshold=ngram_threshold,
-                        embedding_similarity=similarity,
-                        embedding_threshold=embedding_threshold,
-                    )
-                    result.hits.append(hit)
-                    result.reports[bench].hits.append(hit)
-                    doc_contaminated = True
-
-                    if doc.id not in contaminated_doc_ids:
-                        result.contaminated_docs += 1
-                        contaminated_doc_ids.add(doc.id)
 
         if not doc_contaminated:
             result.clean_docs.add(doc.id)
@@ -833,14 +872,22 @@ def semantic_decontam(
     bench_texts = list(benchmark_texts)
     bench_embeddings = compute_embeddings(bench_texts, model=model)
 
+    # Encode all documents in ONE batched call: the old loop re-loaded the
+    # model and re-encoded per document (a full weight load per doc).
+    docs = list(train_docs)
+    doc_embeddings = (
+        compute_embeddings([d.text for d in docs], model=model).embeddings
+        if docs
+        else []
+    )
+
     # Check each training doc
     clean = []
     contaminated = []
 
-    for doc in train_docs:
-        doc_emb = compute_embeddings([doc.text], model=model)
+    for doc, doc_emb in zip(docs, doc_embeddings, strict=True):
         # Compute max similarity to any benchmark
-        similarities = bench_embeddings.embeddings @ doc_emb.embeddings[0]
+        similarities = bench_embeddings.embeddings @ doc_emb
         if similarities.max() >= threshold:
             contaminated.append(doc)
         else:

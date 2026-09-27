@@ -301,3 +301,48 @@ def test_canary_records_detection_evidence() -> None:
 def test_canary_skips_empty_index() -> None:
     canary = decontam_ngram.run_canary(BenchmarkIndex(ngram_n=THRESHOLDS.contam_ngram_n))
     assert canary["status"] == "skipped"
+
+
+# ----------------------------------------------------------------------------------
+# re-run idempotence + fail-loud input guards (S2/S8 conventions; S4 was the
+# deviating stage: write_items APPENDS, so a re-run used to double the snapshot).
+# ----------------------------------------------------------------------------------
+
+
+def test_rerun_replaces_own_snapshot_instead_of_appending(tmp_path: Path) -> None:
+    items = [_corpus_item(f"src_a:{i}", _SHARED_QUESTION) for i in range(4)]
+    inp = tmp_path / "03_dedup"
+    inp.mkdir(parents=True, exist_ok=True)
+    store.write_items(items, inp)
+    index = _make_index([("medqa", "m1", _MEDQA_QUESTION)])
+    out = tmp_path / "04_decontam_ngram"
+
+    m1 = decontam_ngram.stage_entry(
+        "test-run", benchmarks=["medqa"], index=index, input_dir=inp, output_dir=out
+    )
+    m2 = decontam_ngram.stage_entry(
+        "test-run", benchmarks=["medqa"], index=index, input_dir=inp, output_dir=out
+    )
+
+    assert m1.rows_out == m2.rows_out == 4, "stale parts must go before the re-write"
+    assert m2.output_sha256 == m1.output_sha256
+
+
+def test_missing_input_snapshot_fails_loudly(tmp_path: Path) -> None:
+    index = _make_index([("medqa", "m1", _MEDQA_QUESTION)])
+    with pytest.raises(StageError, match="does not exist"):
+        decontam_ngram.stage_entry(
+            "test-run", benchmarks=["medqa"], index=index,
+            input_dir=tmp_path / "nope", output_dir=tmp_path / "out",
+        )
+
+
+def test_empty_input_snapshot_fails_loudly(tmp_path: Path) -> None:
+    inp = tmp_path / "03_dedup"
+    inp.mkdir(parents=True)
+    index = _make_index([("medqa", "m1", _MEDQA_QUESTION)])
+    with pytest.raises(StageError, match="empty"):
+        decontam_ngram.stage_entry(
+            "test-run", benchmarks=["medqa"], index=index,
+            input_dir=inp, output_dir=tmp_path / "out",
+        )

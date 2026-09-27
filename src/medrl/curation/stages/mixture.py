@@ -156,6 +156,14 @@ def _execute_spec(
     """
     con = duckdb.connect()
     try:
+        # One thread, deliberately: setseed() reproducibility is per-connection
+        # AND per-scan. Under parallel scans the same seeded recipe over the
+        # same 2M-row parquet produced a different selection on every fresh
+        # connection (6/6 distinct on duckdb 1.5.5, default threads); with
+        # threads=1 every run is identical. A mixture is a deterministic query
+        # over a snapshot -- the training sets must not reshuffle between runs,
+        # and these group-bys can afford a single core.
+        con.execute("SET threads TO 1")
         con.execute(
             "CREATE OR REPLACE VIEW corpus AS "
             f"SELECT * FROM read_parquet({_sql_file_list(files)}, union_by_name = true)"
@@ -359,9 +367,13 @@ def run_mixture(
         "ids_jsonl": str(exp / f"{STAGE_PREFIX}_{out_name}.ids.jsonl"),
         "spec_sql": str(exp / "mixture_spec.sql"),
     }
-    assert manifest.rows_out == len(unique_ids), (
-        "S15 snapshot must hold exactly the unique selected ids"
-    )
+    if manifest.rows_out != len(unique_ids):
+        # not a bare assert: under `python -O` it vanishes and a snapshot that
+        # does not match the recipe's selection would publish silently
+        raise StageError(
+            f"S15: snapshot holds {manifest.rows_out} rows but the recipe "
+            f"selected {len(unique_ids)} unique ids"
+        )
 
     exp.mkdir(parents=True, exist_ok=True)
     ids_path = exp / f"{STAGE_PREFIX}_{out_name}.ids.jsonl"

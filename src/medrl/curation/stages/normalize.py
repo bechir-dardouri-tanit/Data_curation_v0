@@ -18,12 +18,15 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Callable
 
+from medrl.core.logging import get_logger
 from medrl.curation.registry import REGISTRY_SOURCES, iter_source_files
 from medrl.curation.schema import AnswerType, CorpusItem, StageError
 from medrl.curation.store import reset_dir, stage_dir, write_items
 from medrl.curation.thresholds import THRESHOLDS
 
 Mapper = Callable[[str, dict[str, Any]], CorpusItem | None]
+
+log = get_logger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -61,6 +64,32 @@ def _glotlid():
     return _glotlid_model
 
 
+_glotlid_probed = False
+
+
+def glotlid_available() -> bool:
+    """Whether the GlotLID second opinion can load, probed once and logged.
+
+    ``gltPID`` is a placeholder package id (not on PyPI, not a declared
+    dependency), so today this probe honestly returns False and fastText's
+    verdict stands everywhere -- including the short/low-confidence inputs the
+    second opinion exists for (plan 1.1). Probing eagerly and recording the
+    answer in the manifest makes that absence observable instead of silent;
+    landing the real dependency (cis-lmu/glotlid) turns the flag True with no
+    further changes here.
+    """
+    global _glotlid_probed
+    if not _glotlid_probed:
+        _glotlid_probed = True
+        try:
+            _glotlid()
+            return True
+        except Exception as exc:  # any import/init failure means "absent"
+            log.warning("GlotLID second opinion unavailable (%s); fastText verdict stands", exc)
+            return False
+    return _glotlid_model is not None
+
+
 def detect_lang(text: str) -> tuple[str, float]:
     """(lang, score) with the GlotLID second opinion below the confidence floor.
 
@@ -72,6 +101,10 @@ def detect_lang(text: str) -> tuple[str, float]:
     t = text.strip()
     if not t:
         return "en", 0.0
+    # fasttext's pybind str cast raises TypeError on lone surrogates -- valid
+    # inside a .jsonl row (json.loads happily produces them); scrub to U+FFFD
+    # so one poisoned row costs one row, not the whole multi-hour pass.
+    t = t.encode("utf-8", "replace").decode("utf-8")
     results = _lid().f.predict(t.replace("\n", " ")[:4000], 1, 0.0, "strict")
     if not results:
         return "en", 0.0
@@ -79,14 +112,15 @@ def detect_lang(text: str) -> tuple[str, float]:
     lang, score = label.replace("__label__", ""), float(score)
     if score >= THRESHOLDS.lid_confidence_floor and len(t) >= THRESHOLDS.lid_min_chars:
         return lang, score
-    try:
-        glot = _glotlid().predict(t, k=1)
-        if glot:
-            cand_lang, cand_score = glot[0][0].replace("_Latn", ""), float(glot[0][1])
-            if cand_score >= score:
-                return cand_lang, cand_score
-    except Exception:  # noqa: BLE001 -- GlotLID optional; fastText result stands
-        pass
+    if glotlid_available():
+        try:
+            glot = _glotlid().predict(t, k=1)
+            if glot:
+                cand_lang, cand_score = glot[0][0].replace("_Latn", ""), float(glot[0][1])
+                if cand_score >= score:
+                    return cand_lang, cand_score
+        except Exception:  # per-row second opinion is best-effort
+            pass
     return lang, score
 
 
@@ -290,31 +324,52 @@ def _read_rows(path: Path) -> Iterator[dict[str, Any]]:
                 yield json.loads(line)
 
 
-def materialize_source(source_id: str, records: dict[str, Any]) -> Iterator[CorpusItem]:
-    """Stream one source's files through its mapper + LID."""
+def materialize_source(
+    source_id: str,
+    records: dict[str, Any],
+    counts: dict[str, int] | None = None,
+) -> Iterator[CorpusItem]:
+    """Stream one source's files through its mapper + LID.
+
+    ``counts`` (optional mutable dict) receives the honest per-source tally the
+    manifest publishes: ``rows_raw`` (every row read), ``mapper_none`` (dropped
+    by the mapper's filter), ``errored`` (malformed rows and rows LID could not
+    process -- counted, not fatal), ``kept`` (yielded items). Without it the
+    drops never reach any caller, and the manifest's drop table is structurally
+    zero because only kept items are ever yielded.
+    """
     mapper = MAPPERS.get(source_id)
     if mapper is None:
         raise StageError(f"S1: no mapper registered for source {source_id!r}")
     record = records[source_id]
-    n = 0
     for file_idx, path in enumerate(iter_source_files(record)):
         for row_idx, row in enumerate(_read_rows(path)):
+            if counts is not None:
+                counts["rows_raw"] += 1
             try:
                 item = mapper(source_id, row)
+                if item is None:
+                    if counts is not None:
+                        counts["mapper_none"] += 1
+                    continue
+                # Row-position id: stable across runs (sorted files, deterministic
+                # readers). Content duplication is deliberately NOT resolved here --
+                # that is S3's job; a content hash here would silently merge
+                # distinct rows and salted hash() broke run-to-run reproducibility.
+                item = item.model_copy(update={"id": f"{source_id}:{file_idx}:{row_idx}"})
+                concat = question_concat(row) if not item.messages else question_concat(
+                    {"messages": item.messages, **{k: v for k, v in row.items() if isinstance(v, str)}})
+                lang, score = detect_lang(concat)
+                item.lang, item.lang_score = ("en" if lang.startswith("en") else "fr" if lang.startswith("fr") else lang), score
             except Exception:
-                continue  # malformed row: counted, not fatal -- manifest reports the rate
-            n += 1
-            if item is None:
+                # malformed row, or LID failing on it: counted, not fatal --
+                # the manifest reports the rate (the yield stays outside this
+                # except so a downstream write error is never eaten here)
+                if counts is not None:
+                    counts["errored"] += 1
                 continue
-            # Row-position id: stable across runs (sorted files, deterministic
-            # readers). Content duplication is deliberately NOT resolved here --
-            # that is S3's job; a content hash here would silently merge
-            # distinct rows and salted hash() broke run-to-run reproducibility.
-            item = item.model_copy(update={"id": f"{source_id}:{file_idx}:{row_idx}"})
-            concat = question_concat(row) if not item.messages else question_concat(
-                {"messages": item.messages, **{k: v for k, v in row.items() if isinstance(v, str)}})
-            lang, score = detect_lang(concat)
-            item.lang, item.lang_score = ("en" if lang.startswith("en") else "fr" if lang.startswith("fr") else lang), score
+            if counts is not None:
+                counts["kept"] += 1
             yield item
 
 
@@ -331,20 +386,19 @@ def run_normalize(run_id: str, sources: list[str] | None = None) -> dict[str, An
     batch: list[CorpusItem] = []
 
     for sid in wanted:
-        n_kept = n_seen = 0
-        for item in materialize_source(sid, records):
-            n_seen += 1
+        counts = {"rows_raw": 0, "mapper_none": 0, "errored": 0, "kept": 0}
+        for item in materialize_source(sid, records, counts):
             batch.append(item)
-            n_kept += 1
             if len(batch) >= 100_000:
                 write_items(batch, out)
                 batch.clear()
-        stats[sid] = {"rows_seen": n_seen, "items_kept": n_kept}
+        stats[sid] = dict(counts)
         if batch:
             write_items(batch, out)
             batch.clear()
     return {"stage_dir": str(out), "per_source": stats,
-            "thresholds": {"lid_floor": THRESHOLDS.lid_confidence_floor}}
+            "thresholds": {"lid_floor": THRESHOLDS.lid_confidence_floor},
+            "glotlid_second_opinion": glotlid_available()}
 
 
 def stage_entry(run_id: str, sources: list[str] | None = None):
@@ -356,21 +410,26 @@ def stage_entry(run_id: str, sources: list[str] | None = None):
     result = run_normalize(run_id, sources)
     out_dir = Path(result["stage_dir"])
     per_source = result["per_source"]
+    for sid, s in per_source.items():
+        if s["rows_raw"] != s["kept"] + s["mapper_none"] + s["errored"]:
+            raise StageError(f"S1: drop accounting does not balance for {sid}: {s}")
     manifest = StageManifest(
         run_id=run_id, stage="01_normalize", started_at=started,
         config={"sources": sorted(per_source)},
-        rows_in=sum(s["rows_seen"] for s in per_source.values()),
+        rows_in=sum(s["rows_raw"] for s in per_source.values()),
         rows_out=count_items(out_dir),
         output_sha256=content_sha256(out_dir),
     )
     # S1 is the materialization boundary: mappers legitimately filter raw rows
     # (zh Huatuo subsets, non-biology GeneralThought...). The flags-not-deletes
-    # invariant starts at S2; here every drop is counted and published instead.
+    # invariant starts at S2; here every drop is counted and published instead
+    # (rows_in is the RAW row count; rows_out is what was materialized).
     manifest.notes = {
         "per_source": per_source,
-        "dropped_by_mapper": {k: v["rows_seen"] - v["items_kept"] for k, v in per_source.items()},
-        "rows_out_matches_kept": manifest.rows_out
-        == sum(v["items_kept"] for v in per_source.values()),
+        "dropped_by_mapper": {k: v["mapper_none"] for k, v in per_source.items()},
+        "errored_rows": {k: v["errored"] for k, v in per_source.items()},
+        "rows_out_matches_kept": manifest.rows_out == sum(v["kept"] for v in per_source.values()),
+        "glotlid_second_opinion": result["glotlid_second_opinion"],
     }
     return manifest
 

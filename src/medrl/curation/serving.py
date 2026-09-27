@@ -10,13 +10,23 @@ seed base beside every output.
 Design notes
 ------------
 * Streaming chat completions, usage from the final SSE chunk (include_usage).
-* AIMD: on success grow the in-flight cap by +1 up to ``max_concurrency``;
-  on timeout/5xx shrink it 25% and cool down. Constant 192 is the fallback
-  (and the measured knee -- see the plan section 1.5).
+* AIMD adjusts a *target* that an admission gate enforces; the gate object is
+  never replaced while requests are queued (replacing a live semaphore
+  orphaned its waiters: the ramp never reached the backlog and the cap was
+  only loosely enforced). The gate is rebuilt per event loop -- stages drive
+  ``run_generation`` under fresh ``asyncio.run`` calls (S11 once per chunk),
+  and loop-bound asyncio primitives raise when contended cross-loop.
+* Failures cool down with ``asyncio.sleep``: a blocking ``time.sleep`` in an
+  async path froze the whole event loop once per failure.
 * Thinking-mode control is a SERVER concern (the judge serves with
   ``enable_thinking: false`` defaults); the gateway never per-request hacks it.
-* Resume: ``run_generation`` skips (item_id, repeat) keys already present in
-  the output JSONL -- the eval generate.py convention, loadtest-proven.
+* Resume: ``run_generation`` skips keys already present in the output JSONL --
+  but only when the key's LAST record is a success. A trailing error line is
+  re-run (resume exists to finish interrupted runs, not to enshrine a transient
+  outage: a permanently-skipped error silently shrinks pass@k samples).
+* Bounded worker pool: tasks are created per worker (~max_concurrency), not
+  per job -- S12 gathers 20M+ jobs at plan scale and a Task per job is tens of
+  GB before the first response lands.
 """
 
 from __future__ import annotations
@@ -81,23 +91,59 @@ class Gateway:
         self.max_retries = max_retries
         self.rng = random.Random(seed)
         self._inflight = 8
-        self._sem = asyncio.Semaphore(self._inflight)
+        self._active = 0
+        self._gate: asyncio.Condition | None = None
+        self._gate_loop: asyncio.AbstractEventLoop | None = None
         self._successes = 0
         self._failures = 0
 
+    def _loop_gate(self) -> asyncio.Condition:
+        """The admission gate, (re)built when the running event loop changes.
+
+        asyncio primitives bind to the loop that first awaits them under
+        contention and raise ``... is bound to a different event loop`` when
+        reused on another (verified on CPython 3.12.3); S11 legitimately drives
+        ``run_generation`` once per chunk, each under a fresh ``asyncio.run``.
+        Only the loop-bound primitive is rebuilt; AIMD counters and the target
+        below persist across loops.
+        """
+        loop = asyncio.get_running_loop()
+        if self._gate is None or self._gate_loop is not loop:
+            self._gate = asyncio.Condition()
+            self._gate_loop = loop
+            self._active = 0
+        return self._gate
+
+    async def _admit(self) -> None:
+        """Take one of ``_inflight`` slots, waiting while the gate is full."""
+        gate = self._loop_gate()
+        async with gate:
+            while self._active >= self._inflight:
+                await gate.wait()
+            self._active += 1
+
+    async def _release(self) -> None:
+        gate = self._loop_gate()
+        async with gate:
+            self._active -= 1
+            gate.notify_all()
+
     def _aimd_ok(self) -> None:
-        """Additive increase after a success: +1 up to max, every 8 successes."""
+        """Additive increase after a success: +1 up to max, every 8 successes.
+
+        Only the target moves; the gate re-reads it on every release, so queued
+        waiters ride the ramp (the old code replaced the semaphore object,
+        which orphaned everything already queued on it).
+        """
         self._successes += 1
         if self._successes % 8 == 0 and self._inflight < self.max_concurrency:
             self._inflight = min(self.max_concurrency, self._inflight + 1)
-            self._sem = asyncio.Semaphore(self._inflight)  # replaced; old permits drain
 
-    def _aimd_fail(self) -> None:
+    async def _aimd_fail(self) -> None:
         """Multiplicative decrease on failure: -25%, floor 1, brief cooldown."""
         self._failures += 1
         self._inflight = max(1, int(self._inflight * 0.75))
-        self._sem = asyncio.Semaphore(self._inflight)
-        time.sleep(0.2)
+        await asyncio.sleep(0.2)
 
     async def chat(
         self,
@@ -122,8 +168,9 @@ class Gateway:
             **(extra or {}),
         }
         last_exc: Exception | None = None
-        for attempt in range(self.max_retries):
-            async with self._sem:
+        await self._admit()
+        try:
+            for attempt in range(self.max_retries):
                 try:
                     r = await client.post(
                         f"{self.handle.base_url}/v1/chat/completions",
@@ -131,7 +178,7 @@ class Gateway:
                         timeout=self.timeout_s,
                     )
                     if r.status_code in (429, 500, 502, 503) and attempt < self.max_retries - 1:
-                        self._aimd_fail()
+                        await self._aimd_fail()
                         await asyncio.sleep(2**attempt)
                         continue
                     r.raise_for_status()
@@ -145,7 +192,9 @@ class Gateway:
                     }
                 except (httpx.HTTPError, KeyError, IndexError) as exc:
                     last_exc = exc
-                    self._aimd_fail()
+                    await self._aimd_fail()
+        finally:
+            await self._release()
         raise ServingError(f"chat failed after {self.max_retries} attempts: {last_exc}")
 
 
@@ -160,23 +209,30 @@ async def run_generation(
     """Execute chat jobs with resume; append JSONL lines; return a stats dict.
 
     Each job: {"key": "<item_id>::<repeat>", "messages": [...], plus chat kwargs}.
-    Lines already in out_path (by key) are skipped. Output lines carry the key,
-    the response fields, and wall time. ``client_factory`` lets callers inject a
-    transport (tests use MockTransport; prod uses per-task plain clients).
+    A key already in out_path is skipped -- but only if its LAST record is a
+    success; a trailing ``{"key", "error"}`` line is re-run (and the retry
+    overwrites the verdict when read last-line-wins downstream). Output lines
+    carry the key, the response fields, and wall time. ``client_factory`` lets
+    callers inject a transport (tests use MockTransport; prod uses per-task
+    plain clients).
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    done: set[str] = set()
+    errored: dict[str, bool] = {}
     if out_path.exists():
         with open(out_path) as f:
             for line in f:
                 try:
-                    done.add(json.loads(line)["key"])
+                    rec = json.loads(line)
+                    key = rec["key"]
                 except (json.JSONDecodeError, KeyError):
                     continue
+                errored[key] = "error" in rec
+    done = {k for k, err in errored.items() if not err}
 
     todo = [j for j in jobs if j["key"] not in done]
     stats = {"total": len(jobs), "resumed": len(jobs) - len(todo), "ran": 0, "failed": 0}
     if not todo:
+        stats["concurrency_note"] = concurrency_note or f"aimd->{gateway._inflight}"
         return stats
 
     lock = asyncio.Lock()
@@ -208,11 +264,29 @@ async def run_generation(
             with open(out_path, "a") as f:
                 f.write(json.dumps(record) + "\n")
 
-    async def bounded(job: dict[str, Any]) -> None:
-        async with gateway._sem:
-            await one(job)
+    # Worker pool, not a Task per job: gather-all materialized one coroutine +
+    # Task per remaining job up front (tens of GB at S12's 20M+ jobs, before
+    # the first response). Workers ~= the concurrency cap; the gateway's AIMD
+    # gate does the throttling, so extra workers would only queue.
+    queue: asyncio.Queue = asyncio.Queue()
+    for j in todo:
+        queue.put_nowait(j)
+    n_workers = max(1, min(len(todo), int(getattr(gateway, "max_concurrency", 64)) or 64))
+    stop = asyncio.Event()
 
-    await asyncio.gather(*(bounded(j) for j in todo))
+    async def worker() -> None:
+        while not stop.is_set():
+            try:
+                job = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            try:
+                await one(job)
+            except BaseException:
+                stop.set()  # siblings drain and exit; the exception still propagates
+                raise
+
+    await asyncio.gather(*(worker() for _ in range(n_workers)))
     stats["concurrency_note"] = concurrency_note or f"aimd->{gateway._inflight}"
     return stats
 

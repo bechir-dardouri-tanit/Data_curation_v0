@@ -507,6 +507,13 @@ def stage_entry(
     if not inp.is_dir():
         raise StageError(f"S12: input snapshot {inp} does not exist -- run {INPUT_STAGE} first")
     out.mkdir(parents=True, exist_ok=True)  # explicit dirs skip stage_dir's mkdir
+    # Runner resume contract: a re-run replaces its own snapshot. write_items
+    # APPENDS with continuing part numbers, so stale parts would double every
+    # row on disk (and S13's single write_items call would then die on the
+    # duplicate ids). The generations.jsonl resume cache is stage state and
+    # survives, mirroring judge.py's verdicts.jsonl handling.
+    for stale in out.glob("part-*.parquet"):
+        stale.unlink()
     gen_path = generation_out if generation_out is not None else out / "generations.jsonl"
 
     eligible: list[CorpusItem] = []
@@ -629,7 +636,12 @@ def stage_entry(
             ],
         },
     )
-    assert rows_out == rows_in, "flags-not-deletes: S12 never drops"
+    if rows_out != rows_in:
+        # not a bare assert: under `python -O` it vanishes and a doubled/corrupt
+        # snapshot would publish silently
+        raise StageError(
+            f"S12: rows_in={rows_in} != rows_out={rows_out} -- flags-not-deletes: S12 never drops"
+        )
     return manifest
 
 
