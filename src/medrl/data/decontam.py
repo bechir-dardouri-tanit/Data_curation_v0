@@ -103,6 +103,7 @@ class BenchmarkIndex:
         """
         self.ngram_n = ngram_n
         self.items: dict[str, BenchmarkItem] = {}  # key -> item
+        self.item_hashes: dict[str, set[str]] = {}  # key -> its cached n-gram hashes
         self.ngram_index: dict[str, set[str]] = defaultdict(set)  # ngram_hash -> keys
         self.by_benchmark: dict[str, set[str]] = defaultdict(set)  # benchmark -> keys
         self.embeddings: np.ndarray | None = None
@@ -114,8 +115,11 @@ class BenchmarkIndex:
         key = item.key()
         self.items[key] = item
 
-        # N-gram index
+        # N-gram index; hashes cached on the item -- query_ngram used to
+        # re-hash every candidate's full text per query, an O(candidates x
+        # text-length) hot loop that made 50k-item queries take hours.
         hashes = ngram_hashes(item.text, self.ngram_n)
+        self.item_hashes[key] = hashes
         for h in hashes:
             self.ngram_index[h].add(key)
 
@@ -162,17 +166,23 @@ class BenchmarkIndex:
         for h in query_hashes:
             candidates.update(self.ngram_index.get(h, set()))
 
-        # Verify actual overlap
+        # Verify actual overlap using the hashes cached at add() time, with a
+        # size-ratio prefilter: Jaccard <= min(|A|,|B|)/max(|A|,|B|), so a
+        # candidate whose gram-set size ratio sits below the threshold can
+        # never reach it and is skipped without the set intersection.
         hits = []
+        q_size = max(len(query_hashes), 1)
         for key in candidates:
             if benchmark is not None and self.items[key].benchmark != benchmark:
                 continue
-            item = self.items[key]
-            item_hashes = set()
-            for h in ngram_hashes(item.text, self.ngram_n):
-                self.ngram_index.setdefault(h, set())
-            # Re-compute for accurate overlap
-            item_hashes = ngram_hashes(item.text, self.ngram_n)
+            item_hashes = self.item_hashes.get(key)
+            if item_hashes is None:
+                item_hashes = ngram_hashes(self.items[key].text, self.ngram_n)
+                self.item_hashes[key] = item_hashes
+            if min(len(query_hashes), len(item_hashes)) / max(
+                len(query_hashes), len(item_hashes), 1
+            ) < threshold:
+                continue
             overlap = ngram_overlap(query_hashes, item_hashes)
             if overlap >= threshold:
                 hits.append((key, overlap))
