@@ -52,7 +52,7 @@ def main() -> None:
             except json.JSONDecodeError:
                 continue
 
-    with open(RESULTS / "summary.jsonl", "w") as f:
+    with (RESULTS / "summary.jsonl").open("w") as f:
         for r in rows:
             tag = r.get("tag", "")
             base = tag[:-len(LONG_PROBE_TAG)] if tag.endswith(LONG_PROBE_TAG) else tag
@@ -68,10 +68,7 @@ def main() -> None:
             continue
         tag = r["tag"].replace(LONG_PROBE_TAG, "")
         mode = r.get("mode", "chat")
-        if r.get("long_only"):
-            key = f"long-{mode}"
-        else:
-            key = f"{mode}-{r['level']}"
+        key = f"long-{mode}" if r.get("long_only") else f"{mode}-{r['level']}"
         by_model.setdefault(tag, {})[key] = r
 
     out_lines = []
@@ -85,7 +82,7 @@ def main() -> None:
             " | long-in @C=192 |",
             "|" + "---|" * (3 + len(cells) + 1),
         ]
-        def speed(t: str) -> float:
+        def speed(t: str, mode: str = mode) -> float:
             return by_model[t].get(f"{mode}-384", {}).get("out_tok_per_s") or 0
         for tag in sorted(by_model, key=speed, reverse=True):
             m = by_model[tag]

@@ -374,8 +374,12 @@ def materialize_source(
     source_id: str,
     records: dict[str, Any],
     counts: dict[str, int] | None = None,
+    limit: int | None = None,
 ) -> Iterator[CorpusItem]:
     """Stream one source's files through its mapper + LID.
+
+    ``limit`` caps KEPT items per source (the pilot's proportional sample);
+    None materializes the whole source.
 
     ``counts`` (optional mutable dict) receives the honest per-source tally the
     manifest publishes: ``rows_raw`` (every row read), ``mapper_none`` (dropped
@@ -388,6 +392,7 @@ def materialize_source(
     if mapper is None:
         raise StageError(f"S1: no mapper registered for source {source_id!r}")
     record = records[source_id]
+    n_kept = 0
     for file_idx, path in enumerate(iter_source_files(record)):
         for row_idx, row in enumerate(_read_rows(path)):
             if counts is not None:
@@ -427,11 +432,32 @@ def materialize_source(
                 continue
             if counts is not None:
                 counts["kept"] += 1
+            n_kept += 1
             yield item
+            if limit is not None and n_kept >= limit:
+                return
 
 
-def run_normalize(run_id: str, sources: list[str] | None = None) -> dict[str, Any]:
-    """Materialize all (or a subset of) sources into the 01_normalize snapshot."""
+def _limit_for(
+    source_id: str, limit_per_source: dict[str, int] | int | None
+) -> int | None:
+    if limit_per_source is None:
+        return None
+    if isinstance(limit_per_source, int):
+        return limit_per_source
+    return limit_per_source.get(source_id)
+
+
+def run_normalize(
+    run_id: str,
+    sources: list[str] | None = None,
+    limit_per_source: dict[str, int] | int | None = None,
+) -> dict[str, Any]:
+    """Materialize all (or a subset of) sources into the 01_normalize snapshot.
+
+    ``limit_per_source``: int (same cap for every source) or per-source dict --
+    the pilot's proportional sampler. None materializes everything.
+    """
     from medrl.curation.store import read_registry
 
     records = {r.source_id: r for r in read_registry(run_id)}
@@ -444,7 +470,9 @@ def run_normalize(run_id: str, sources: list[str] | None = None) -> dict[str, An
 
     for sid in wanted:
         counts = {"rows_raw": 0, "mapper_none": 0, "errored": 0, "kept": 0}
-        for item in materialize_source(sid, records, counts):
+        for item in materialize_source(
+            sid, records, counts, limit=_limit_for(sid, limit_per_source)
+        ):
             batch.append(item)
             if len(batch) >= 100_000:
                 write_items(batch, out)
@@ -461,13 +489,17 @@ def run_normalize(run_id: str, sources: list[str] | None = None) -> dict[str, An
     }
 
 
-def stage_entry(run_id: str, sources: list[str] | None = None) -> StageManifest:
+def stage_entry(
+    run_id: str,
+    sources: list[str] | None = None,
+    limit_per_source: dict[str, int] | int | None = None,
+) -> StageManifest:
     """Runner adapter: dict result -> StageManifest."""
     from medrl.curation.schema import StageManifest, utcnow
     from medrl.curation.store import content_sha256, count_items
 
     started = utcnow()
-    result = run_normalize(run_id, sources)
+    result = run_normalize(run_id, sources, limit_per_source)
     out_dir = Path(result["stage_dir"])
     per_source = result["per_source"]
     for sid, s in per_source.items():

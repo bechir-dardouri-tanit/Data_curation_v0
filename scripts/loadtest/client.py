@@ -16,6 +16,7 @@ import json
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 import aiohttp
 
@@ -64,7 +65,7 @@ def pct(values: list[float], p: float) -> float | None:
     if not values:
         return None
     s = sorted(values)
-    k = min(len(s) - 1, int(round(p / 100 * (len(s) - 1))))
+    k = min(len(s) - 1, round(p / 100 * (len(s) - 1)))
     return s[k]
 
 
@@ -74,7 +75,6 @@ def build_workload(pool: dict, n_requests: int, mix: str, long_only: bool) -> li
         step = max(1, len(entries) // n_requests)
         return [entries[(i * step) % len(entries)] for i in range(n_requests)]
     # Mix pattern over an 8-slot cycle: short*1 medium*4 long*2 open*1
-    parts = {"short": "short", "medium": "medium", "long": "long", "open": "open"}
     cycle: list[str] = []
     want = {"short": 1, "medium": 4, "long": 2, "open": 1}
     if mix != "default":
@@ -86,7 +86,7 @@ def build_workload(pool: dict, n_requests: int, mix: str, long_only: bool) -> li
     for bucket, weight in want.items():
         cycle.extend([bucket] * weight)
     buckets = {b: list(pool[b]) for b in set(cycle)}
-    idx = {b: 0 for b in buckets}
+    idx = dict.fromkeys(buckets, 0)
     out = []
     for i in range(n_requests):
         b = cycle[i % len(cycle)]
@@ -245,7 +245,7 @@ def main() -> None:
     if args.requests is None:
         args.requests = min(2 * args.level + 8, 400)
 
-    with open(args.pool) as f:
+    with Path(args.pool).open() as f:
         pool = json.load(f)["pool"]
 
     args.extra_body = (
@@ -289,7 +289,7 @@ def main() -> None:
         ep, accepted_body = loop.run_until_complete(probe())
     except RuntimeError as e:
         print(json.dumps({"level": args.level, "tag": args.tag, "fatal": str(e)}))
-        raise SystemExit(2)
+        raise SystemExit(2) from e
     args.endpoint_resolved = ep
     # If the server rejected the thinking kwarg (accepted chat without it) or
     # forced the raw-completions endpoint, stream plain so the cell can run.
@@ -299,7 +299,7 @@ def main() -> None:
     agg = loop.run_until_complete(run_cell(args, pool))
 
     if args.out_append:
-        with open(args.out_append, "a") as f:
+        with Path(args.out_append).open("a") as f:
             f.write(json.dumps(agg) + "\n")
     print(json.dumps(agg))
 

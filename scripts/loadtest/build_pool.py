@@ -19,6 +19,7 @@ import argparse
 import json
 import random
 import sys
+from pathlib import Path
 
 sys.path.insert(0, "/root/medrl/src")
 
@@ -84,7 +85,7 @@ def main() -> None:
     stats = {k: {"count": len(s), "est_tok_mean": round(sum(s) / max(len(s), 1))} for k, s in sizes.items()}
     out = {"pool": pool, "meta": {"stats": stats}}
 
-    with open(args.out, "w") as f:
+    with Path(args.out).open("w") as f:
         json.dump(out, f)
     print(json.dumps(stats, indent=2))
     print(f"wrote {args.out}")
