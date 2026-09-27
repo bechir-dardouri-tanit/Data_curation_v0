@@ -5,7 +5,7 @@ set -u
 export HF_HOME=/scratch/medrl/.cache/huggingface
 export HF_HUB_CACHE=/scratch/medrl/.cache/huggingface/hub
 export HF_DATASETS_CACHE=/scratch/medrl/.cache/datasets
-export HF_TOKEN="***REDACTED***"
+export HF_TOKEN="${HF_TOKEN:?export HF_TOKEN first}"
 LOG=/scratch/medrl/curation/logs/downloads.log
 mkdir -p /scratch/medrl/curation/logs
 source /root/medrl/.venv/bin/activate
