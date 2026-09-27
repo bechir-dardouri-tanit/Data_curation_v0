@@ -467,9 +467,7 @@ def test_stage_entry_unlabelable_only_needs_no_gateway(tmp_path: Any):
     assert manifest.notes["labelled"] == 0
 
 
-def test_stage_entry_rerun_replaces_own_snapshot_but_keeps_resume(
-    tmp_path: Any, small_k: None
-):
+def test_stage_entry_rerun_replaces_own_snapshot_but_keeps_resume(tmp_path: Any, small_k: None):
     """Regression: stage_entry only mkdir'd its output; write_items APPENDS with
     continuing part numbers, so the documented re-run doubled the snapshot and
     then died on rows_out != rows_in (an AssertionError the runner does not
@@ -479,14 +477,24 @@ def test_stage_entry_rerun_replaces_own_snapshot_but_keeps_resume(
     gen = tmp_path / "gen" / "generations.jsonl"
 
     first = difficulty.stage_entry(
-        "run-x", input_dir=inp, output_dir=out,
-        gateway=_gateway(), generation_out=gen, seed_base=0, client_factory=_factory(),
+        "run-x",
+        input_dir=inp,
+        output_dir=out,
+        gateway=_gateway(),
+        generation_out=gen,
+        seed_base=0,
+        client_factory=_factory(),
     )
     gen_lines_after_first = len(gen.read_text().splitlines())
 
     second = difficulty.stage_entry(
-        "run-x", input_dir=inp, output_dir=out,
-        gateway=_gateway(), generation_out=gen, seed_base=0, client_factory=_factory(),
+        "run-x",
+        input_dir=inp,
+        output_dir=out,
+        gateway=_gateway(),
+        generation_out=gen,
+        seed_base=0,
+        client_factory=_factory(),
     )
 
     assert first.rows_out == second.rows_out == 8, "stale parts must go before the re-write"

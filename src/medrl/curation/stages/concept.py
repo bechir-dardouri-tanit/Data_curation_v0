@@ -263,7 +263,9 @@ def flag_rates(items: Sequence[CorpusItem], flags: Sequence[str]) -> dict[str, d
 
     out: dict[str, dict[str, float]] = {}
     for f in flags:
-        rates = {src: set_by_source[f].get(src, 0) / total for src, total in total_by_source.items()}
+        rates = {
+            src: set_by_source[f].get(src, 0) / total for src, total in total_by_source.items()
+        }
         rates["_all"] = sum(set_by_source[f].values()) / len(items) if items else 0.0
         out[f] = rates
     return out

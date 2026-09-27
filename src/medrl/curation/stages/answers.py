@@ -21,6 +21,7 @@ pattern -- the judge-authored criterion pair covers the deep cases in S11).
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from medrl.curation import store
 from medrl.curation.schema import CorpusItem, StageManifest, utcnow
@@ -93,17 +94,19 @@ def run_answers(
     inp = store.stage_dir(run_id, input_stage)
     out = store.reset_dir(store.stage_dir(run_id, output_stage))
     manifest = StageManifest(
-        run_id=run_id, stage=output_stage, started_at=started,
+        run_id=run_id,
+        stage=output_stage,
+        started_at=started,
         thresholds={"numeric_rtol": THRESHOLDS.numeric_rtol},
         config={},
     )
-    counts = {"mcqa": 0, "numeric": 0, "free_text": 0, "none": 0}
+    counts: dict[str, int] = {"mcqa": 0, "numeric": 0, "free_text": 0, "none": 0}
     n_wrong = n_contra = 0
     buf: list[CorpusItem] = []
 
     for it in store.iter_items(inp):
         counts[it.answer_type] = counts.get(it.answer_type, 0) + 1
-        updates: dict = {}
+        updates: dict[str, Any] = {}
         if it.answer_type == "mcqa" and not it.flags.f_answer_wrong:
             flags = verify_mcqa(it)
             if flags["f_answer_wrong"]:
@@ -111,7 +114,8 @@ def run_answers(
                 n_wrong += 1
             elif flags["f_answer_right_reasoning_contradicts"]:
                 updates["flags"] = it.flags.model_copy(
-                    update={"f_answer_right_reasoning_contradicts": True})
+                    update={"f_answer_right_reasoning_contradicts": True}
+                )
                 n_contra += 1
         elif it.answer_type == "numeric" and not it.flags.f_answer_wrong:
             if verify_numeric(it):
@@ -130,9 +134,12 @@ def run_answers(
     manifest.input_sha256 = store.content_sha256(inp)
     manifest.output_sha256 = store.content_sha256(out)
     manifest.flag_rates = {"f_answer_wrong": {"_all": n_wrong / total}}
-    manifest.notes = {"by_answer_type": counts, "wrong": n_wrong,
-                      "right_but_contradicts": n_contra,
-                      "no_answer_rows_skipped": counts["free_text"] + counts["none"]}
+    manifest.notes = {
+        "by_answer_type": counts,
+        "wrong": n_wrong,
+        "right_but_contradicts": n_contra,
+        "no_answer_rows_skipped": counts["free_text"] + counts["none"],
+    }
     return manifest
 
 

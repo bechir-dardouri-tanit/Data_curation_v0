@@ -336,7 +336,9 @@ def test_rubric_change_invalidates_cached_verdicts_and_prior_q(tmp_path: Path) -
 
     yaml_v1 = tmp_path / "axes_v1.yaml"
     yaml_v1.write_text(TEST_AXES_YAML)
-    gw1 = FakeGateway(lambda messages: '{"met": ["coh-heavy", "coh-light", "clin-only", "fmt-a", "fmt-b"]}')
+    gw1 = FakeGateway(
+        lambda messages: '{"met": ["coh-heavy", "coh-light", "clin-only", "fmt-a", "fmt-b"]}'
+    )
     stage_entry("r", input_dir=inp, output_dir=tmp_path / "out", axes_path=yaml_v1, gateway=gw1)
     n_v1_prompts = len(gw1.user_prompts)
     assert n_v1_prompts == 6  # 2 rows x 3 axes
@@ -344,7 +346,9 @@ def test_rubric_change_invalidates_cached_verdicts_and_prior_q(tmp_path: Path) -
     yaml_v2 = tmp_path / "axes_v2.yaml"
     yaml_v2.write_text(TEST_AXES_YAML.replace("weight: 3.0", "weight: 5.0"))
     gw2 = FakeGateway(lambda messages: '{"met": []}')
-    manifest2 = stage_entry("r", input_dir=inp, output_dir=tmp_path / "out", axes_path=yaml_v2, gateway=gw2)
+    manifest2 = stage_entry(
+        "r", input_dir=inp, output_dir=tmp_path / "out", axes_path=yaml_v2, gateway=gw2
+    )
 
     # every row re-asked under the new rubric, not answered from cache
     assert len(gw2.user_prompts) == n_v1_prompts

@@ -45,7 +45,7 @@ def test_self_join_flags_near_duplicates_canonical_lower_id(scratch: Path) -> No
     items = [
         _item("s:a", base),
         _item("s:b", base + 0.001 * _vec(2)),  # cos ~1 -> duplicate of the lower id
-        _item("s:c", _vec(3)),                  # orthogonal -> clean
+        _item("s:c", _vec(3)),  # orthogonal -> clean
     ]
     store.write_items(items, inp)
 
@@ -74,17 +74,17 @@ def test_benchmark_join_matches_the_per_pair_definition(scratch: Path) -> None:
         "medmcqa": [{"id": "mc:1", "key": "mc1"}, {"id": "mc:2", "key": "mc2"}],
     }
     vectors = {
-        "m1": _vec(7),            # identical direction to s:leak -> cos 1.0
+        "m1": _vec(7),  # identical direction to s:leak -> cos 1.0
         "mc1": _vec(50),
         "mc2": _vec(7) + 0.01 * _vec(51),  # also near: still below the m1 hit
     }
     blob_path = scratch / "bench.json"
     blob_path.write_text(json.dumps(bench_vectors))
-    np.savez(scratch / "bench.npz", **{k: np.asarray(v, dtype=np.float32) for k, v in vectors.items()})
-
-    manifest = decontam_sem.run_decontam_sem(
-        "run-s", bench_vectors_path=str(blob_path)
+    np.savez(
+        scratch / "bench.npz", **{k: np.asarray(v, dtype=np.float32) for k, v in vectors.items()}
     )
+
+    manifest = decontam_sem.run_decontam_sem("run-s", bench_vectors_path=str(blob_path))
 
     # the reference: the old per-pair loop, verbatim
     best: tuple[str, float] | None = None
@@ -106,7 +106,9 @@ def test_benchmark_join_matches_the_per_pair_definition(scratch: Path) -> None:
         assert rows[clean_id].contam_benchmark is None
 
 
-def test_missing_ann_index_is_refused_at_scale(scratch: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_ann_index_is_refused_at_scale(
+    scratch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A missing ann.usearch above the brute-force ceiling is a StageError, not
     a silent weeks-long O(n^2) full-dim run."""
     monkeypatch.setattr(decontam_sem, "_BRUTE_FORCE_MAX_ITEMS", 3)

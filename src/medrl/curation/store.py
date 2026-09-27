@@ -22,9 +22,10 @@ import json
 import shutil
 from collections.abc import Iterable, Iterator
 from pathlib import Path
+from typing import Any
 
-import pyarrow as pa
-import pyarrow.parquet as pq
+import pyarrow as pa  # type: ignore[import-untyped]
+import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from medrl.curation.schema import CorpusItem, Flags, SourceRecord, StageManifest, utcnow
 
@@ -51,56 +52,92 @@ def stage_manifest_path(run_id: str, stage: str) -> Path:
 
 _FLAG_FIELDS = list(Flags.model_fields)  # stable flag order, single definition point
 
-_ARROW_SCHEMA = pa.schema([
-    ("id", pa.string()), ("source", pa.string()), ("lang", pa.string()),
-    ("lang_score", pa.float64()), ("licence", pa.string()), ("redistributable", pa.bool_()),
-    # messages as a JSON string, like tools/meta: a typed struct(role, content)
-    # column SILENTLY DROPS every other key a source carries (verified on
-    # pyarrow 25: OpenAI `name`/`tool_call_id` vanish on the round trip), and
-    # the schema contract is lossless with sources.
-    ("messages", pa.string()),
-    ("thinking", pa.string()), ("tools", pa.string()), ("answer", pa.string()),
-    ("answer_type", pa.string()), ("meta", pa.string()),
-    # Flags as an explicit bool struct -- queryable per-flag from DuckDB.
-    *[("flags_" + name.removeprefix("f_"), pa.bool_()) for name in _FLAG_FIELDS],
-    ("dup_of", pa.string()), ("contam_benchmark", pa.string()),
-    ("embedding", pa.binary()),
-    ("cuis", pa.list_(pa.string())), ("answer_cui", pa.string()),
-    ("kg_triples", pa.string()), ("support_frac", pa.float64()), ("unknown_frac", pa.float64()),
-    ("q_coherence", pa.int8()), ("q_clinical", pa.int8()), ("q_format", pa.int8()),
-    ("difficulty", pa.float64()), ("difficulty_band", pa.string()), ("n_covered_by", pa.int64()),
-])
+_ARROW_SCHEMA = pa.schema(
+    [
+        ("id", pa.string()),
+        ("source", pa.string()),
+        ("lang", pa.string()),
+        ("lang_score", pa.float64()),
+        ("licence", pa.string()),
+        ("redistributable", pa.bool_()),
+        # messages as a JSON string, like tools/meta: a typed struct(role, content)
+        # column SILENTLY DROPS every other key a source carries (verified on
+        # pyarrow 25: OpenAI `name`/`tool_call_id` vanish on the round trip), and
+        # the schema contract is lossless with sources.
+        ("messages", pa.string()),
+        ("thinking", pa.string()),
+        ("tools", pa.string()),
+        ("answer", pa.string()),
+        ("answer_type", pa.string()),
+        ("meta", pa.string()),
+        # Flags as an explicit bool struct -- queryable per-flag from DuckDB.
+        *[("flags_" + name.removeprefix("f_"), pa.bool_()) for name in _FLAG_FIELDS],
+        ("dup_of", pa.string()),
+        ("contam_benchmark", pa.string()),
+        ("embedding", pa.binary()),
+        ("cuis", pa.list_(pa.string())),
+        ("answer_cui", pa.string()),
+        ("kg_triples", pa.string()),
+        ("support_frac", pa.float64()),
+        ("unknown_frac", pa.float64()),
+        ("q_coherence", pa.int8()),
+        ("q_clinical", pa.int8()),
+        ("q_format", pa.int8()),
+        ("difficulty", pa.float64()),
+        ("difficulty_band", pa.string()),
+        ("n_covered_by", pa.int64()),
+    ]
+)
 
 
-def _to_arrow_row(it: CorpusItem) -> dict:
+def _to_arrow_row(it: CorpusItem) -> dict[str, Any]:
     row = it.model_dump()
-    row["messages"] = json.dumps(row["messages"], ensure_ascii=False, default=str) if row["messages"] else None
+    row["messages"] = (
+        json.dumps(row["messages"], ensure_ascii=False, default=str) if row["messages"] else None
+    )
     row["meta"] = json.dumps(row["meta"], sort_keys=True, default=str) if row["meta"] else None
     row["tools"] = json.dumps(row["tools"], default=str) if row["tools"] else None
-    row["kg_triples"] = json.dumps([list(t) for t in row["kg_triples"]]) if row["kg_triples"] else None
+    row["kg_triples"] = (
+        json.dumps([list(t) for t in row["kg_triples"]]) if row["kg_triples"] else None
+    )
     flags = row.pop("flags")
     for name, val in flags.items():
         row["flags_" + name.removeprefix("f_")] = val
     return row
 
 
-def _from_arrow_row(row: dict) -> CorpusItem:
+def _from_arrow_row(row: dict[str, Any]) -> CorpusItem:
     flags = {}
     for name in _FLAG_FIELDS:
         flags[name] = row.pop("flags_" + name.removeprefix("f_")) or False
     row["flags"] = flags
     msg = row.get("messages")
-    if isinstance(msg, str):          # current writer: JSON string
+    if isinstance(msg, str):  # current writer: JSON string
         row["messages"] = json.loads(msg) if msg else []
     elif msg is None:
         row["messages"] = []
     # else: legacy struct-decoded list-of-dicts -- already the right shape
     row["meta"] = json.loads(row["meta"]) if row.get("meta") else {}
     row["tools"] = json.loads(row["tools"]) if row.get("tools") else None
-    row["kg_triples"] = [tuple(t) for t in json.loads(row["kg_triples"])] if row.get("kg_triples") else []
-    for nullable in ("thinking", "answer", "dup_of", "contam_benchmark", "answer_cui",
-                     "difficulty_band", "lang_score", "support_frac", "unknown_frac",
-                     "q_coherence", "q_clinical", "q_format", "difficulty", "redistributable"):
+    row["kg_triples"] = (
+        [tuple(t) for t in json.loads(row["kg_triples"])] if row.get("kg_triples") else []
+    )
+    for nullable in (
+        "thinking",
+        "answer",
+        "dup_of",
+        "contam_benchmark",
+        "answer_cui",
+        "difficulty_band",
+        "lang_score",
+        "support_frac",
+        "unknown_frac",
+        "q_coherence",
+        "q_clinical",
+        "q_format",
+        "difficulty",
+        "redistributable",
+    ):
         if row.get(nullable) is None:
             row[nullable] = None
     return CorpusItem.model_validate(row)
@@ -114,12 +151,17 @@ def reset_dir(directory: Path) -> Path:
     """
     directory.mkdir(parents=True, exist_ok=True)
     for f in directory.iterdir():
-        if f.is_file() and (f.name.startswith("part-") or f.suffix in {".usearch", ".json"} and f.stem.startswith("ann")):
+        if f.is_file() and (
+            f.name.startswith("part-")
+            or (f.suffix in {".usearch", ".json"} and f.stem.startswith("ann"))
+        ):
             f.unlink()
     return directory
 
 
-def write_items(items: Iterable[CorpusItem], directory: Path, max_rows_per_file: int = 50_000) -> int:
+def write_items(
+    items: Iterable[CorpusItem], directory: Path, max_rows_per_file: int = 50_000
+) -> int:
     """Write items as part files; returns count written. Sorted by id for stable hashes.
 
     Multiple calls into the same directory APPEND (part numbering continues from
@@ -185,7 +227,7 @@ def content_sha256(directory: Path) -> str:
 
 def source_sha256(path: Path) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with path.open("rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
@@ -241,7 +283,7 @@ def write_registry(records: Iterable[SourceRecord], run_id: str) -> Path:
     d = registry_path(run_id)
     d.mkdir(parents=True, exist_ok=True)
     out = d / "registry.jsonl"
-    with open(out, "w") as f:
+    with out.open("w") as f:
         for rec in sorted(records, key=lambda r: r.source_id):
             f.write(rec.model_dump_json() + "\n")
     return out
@@ -251,18 +293,22 @@ def read_registry(run_id: str) -> list[SourceRecord]:
     out = registry_path(run_id) / "registry.jsonl"
     if not out.exists():
         return []
-    return [SourceRecord.model_validate_json(line) for line in out.read_text().splitlines() if line.strip()]
+    return [
+        SourceRecord.model_validate_json(line)
+        for line in out.read_text().splitlines()
+        if line.strip()
+    ]
 
 
 __all__ = [
     "EXPERIMENTS_ROOT",
-    "reset_dir",
     "SCRATCH_ROOT",
     "content_sha256",
     "count_items",
     "iter_items",
     "mirror_light",
     "read_registry",
+    "reset_dir",
     "rows_sha256",
     "run_dir",
     "save_manifest",

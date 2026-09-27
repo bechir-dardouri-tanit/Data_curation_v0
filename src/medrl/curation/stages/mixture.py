@@ -308,9 +308,7 @@ def run_mixture(
             "S15: output snapshot must differ from the input snapshot (reset_dir would "
             "destroy the input)"
         )
-    exp = (
-        Path(experiments_dir) if experiments_dir is not None else store.EXPERIMENTS_ROOT / run_id
-    )
+    exp = Path(experiments_dir) if experiments_dir is not None else store.EXPERIMENTS_ROOT / run_id
 
     _assert_duckdb_support()
     cols, instances, input_counts, survivors = _execute_spec(files, script)

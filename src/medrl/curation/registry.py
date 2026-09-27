@@ -13,57 +13,100 @@ a no-op and the registry says so, rather than inheriting a phantom step).
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from medrl.curation.schema import SourceRecord, StageError, StageManifest, utcnow
-from medrl.curation.store import content_sha256, rows_sha256, stage_dir, write_registry
+from medrl.curation.store import stage_dir, write_registry
 
 REGISTRY_SOURCES: dict[str, dict[str, Any]] = {
     # source_id -> hub id + expected shape. Counts/licences verified 2026-09-26
     # (dataset-audit workflow); licences tagged "unknown" are recorded as unknown
     # with the hub page as licence_source until resolved upstream.
     "ii_medical_reasoning_sft": {
-        "hf_id": "Intelligent-Internet/II-Medical-Reasoning-SFT", "expected_rows": 2_197_741,
-        "lang": "en", "has_cot": True, "licence": "unknown"},
+        "hf_id": "Intelligent-Internet/II-Medical-Reasoning-SFT",
+        "expected_rows": 2_197_741,
+        "lang": "en",
+        "has_cot": True,
+        "licence": "unknown",
+    },
     "finemed_sft": {
-        "hf_id": "hongzhouyu/FineMed-SFT", "expected_rows": 731_992,
-        "lang": "mixed", "has_cot": True, "licence": "mit"},
+        "hf_id": "hongzhouyu/FineMed-SFT",
+        "expected_rows": 731_992,
+        "lang": "mixed",
+        "has_cot": True,
+        "licence": "mit",
+    },
     "chatdoctor_healthcaremagic": {
-        "hf_id": "lavita/ChatDoctor-HealthCareMagic-100k", "expected_rows": 112_165,
-        "lang": "en", "has_cot": False, "licence": "unknown"},
+        "hf_id": "lavita/ChatDoctor-HealthCareMagic-100k",
+        "expected_rows": 112_165,
+        "lang": "en",
+        "has_cot": False,
+        "licence": "unknown",
+    },
     "generalthought_biology": {
-        "hf_id": "GeneralReasoning/GeneralThought-430K", "expected_rows": 430_788,
-        "lang": "en", "has_cot": True, "licence": "mit",
-        "subset": "human-biology"},  # filtered to the biology slice at S1, count recorded
+        "hf_id": "GeneralReasoning/GeneralThought-430K",
+        "expected_rows": 430_788,
+        "lang": "en",
+        "has_cot": True,
+        "licence": "mit",
+        "subset": "human-biology",
+    },  # filtered to the biology slice at S1, count recorded
     "medical_r1_distill": {
-        "hf_id": "FreedomIntelligence/Medical-R1-Distill-Data", "expected_rows": 22_000,
-        "lang": "en", "has_cot": True, "licence": "apache-2.0"},
+        "hf_id": "FreedomIntelligence/Medical-R1-Distill-Data",
+        "expected_rows": 22_000,
+        "lang": "en",
+        "has_cot": True,
+        "licence": "apache-2.0",
+    },
     "m23k_tokenized": {
-        "hf_id": "UCSC-VLAA/m23k-tokenized", "expected_rows": 23_493,
-        "lang": "en", "has_cot": True, "licence": "unknown"},
+        "hf_id": "UCSC-VLAA/m23k-tokenized",
+        "expected_rows": 23_493,
+        "lang": "en",
+        "has_cot": True,
+        "licence": "unknown",
+    },
     "medreason": {
-        "hf_id": "UCSC-VLAA/MedReason", "expected_rows": 32_682,
-        "lang": "en", "has_cot": True, "licence": "apache-2.0"},
+        "hf_id": "UCSC-VLAA/MedReason",
+        "expected_rows": 32_682,
+        "lang": "en",
+        "has_cot": True,
+        "licence": "apache-2.0",
+    },
     "huatuo_o1_reasoning": {
-        "hf_id": "FreedomIntelligence/medical-o1-reasoning-SFT", "expected_rows": 44_600,
-        "lang": "en", "has_cot": True, "licence": "apache-2.0",
-        "note": "en (19.7k) + en_mix (24.9k) subsets; zh excluded"},
+        "hf_id": "FreedomIntelligence/medical-o1-reasoning-SFT",
+        "expected_rows": 44_600,
+        "lang": "en",
+        "has_cot": True,
+        "licence": "apache-2.0",
+        "note": "en (19.7k) + en_mix (24.9k) subsets; zh excluded",
+    },
     "finemed_dpo": {
-        "hf_id": "hongzhouyu/FineMed-DPO", "expected_rows": 32_919,
-        "lang": "en", "has_cot": True, "licence": "apache-2.0"},
+        "hf_id": "hongzhouyu/FineMed-DPO",
+        "expected_rows": 32_919,
+        "lang": "en",
+        "has_cot": True,
+        "licence": "apache-2.0",
+    },
     "ii_medical_rl": {
-        "hf_id": "Intelligent-Internet/II-Medical-RL", "expected_rows": 15_910,
-        "lang": "en", "has_cot": True, "licence": "unknown"},
+        "hf_id": "Intelligent-Internet/II-Medical-RL",
+        "expected_rows": 15_910,
+        "lang": "en",
+        "has_cot": True,
+        "licence": "unknown",
+    },
     "chatdoctor_rl": {
-        "hf_id": "Intelligent-Internet/ChatDoctor-RL", "expected_rows": 16_749,
-        "lang": "en", "has_cot": False, "licence": "unknown"},
+        "hf_id": "Intelligent-Internet/ChatDoctor-RL",
+        "expected_rows": 16_749,
+        "lang": "en",
+        "has_cot": False,
+        "licence": "unknown",
+    },
 }
 
 HUB_DATASET_URL = "https://huggingface.co/api/datasets/{hf_id}"
@@ -92,8 +135,9 @@ def fetch_hub_metadata(hf_id: str) -> dict[str, Any]:
     token = os.environ.get("HF_TOKEN")
     if token:
         headers["authorization"] = f"Bearer {token}"
-    r = httpx.get(HUB_DATASET_URL.format(hf_id=hf_id), headers=headers, timeout=30,
-                  follow_redirects=True)
+    r = httpx.get(
+        HUB_DATASET_URL.format(hf_id=hf_id), headers=headers, timeout=30, follow_redirects=True
+    )
     r.raise_for_status()
     meta = r.json()
     return {
@@ -124,9 +168,7 @@ def acquire(plan: SourcePlan, out_dir: Path) -> SourceRecord:
         )
     )
 
-    data_files = sorted(
-        p for p in path.rglob("*") if p.suffix in {".jsonl", ".json", ".parquet"}
-    )
+    data_files = sorted(p for p in path.rglob("*") if p.suffix in {".jsonl", ".json", ".parquet"})
     if not data_files:
         raise StageError(f"{plan.source_id}: no data files under {path}")
     size_bytes = sum(p.stat().st_size for p in data_files)
@@ -138,7 +180,7 @@ def acquire(plan: SourcePlan, out_dir: Path) -> SourceRecord:
     fh = hashlib.sha256()
     for p in data_files:
         fh.update(p.name.encode())
-        with open(p, "rb") as f:
+        with p.open("rb") as f:
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 fh.update(chunk)
 
@@ -169,7 +211,9 @@ def run_registry(run_id: str, plans_override: list[SourcePlan] | None = None) ->
     started = utcnow()
     out = stage_dir(run_id, "00_registry")
     manifest = StageManifest(
-        run_id=run_id, stage="00_registry", started_at=started,
+        run_id=run_id,
+        stage="00_registry",
+        started_at=started,
         config={"n_sources": len(plans_override or plans())},
     )
     records: list[SourceRecord] = []
@@ -177,7 +221,7 @@ def run_registry(run_id: str, plans_override: list[SourcePlan] | None = None) ->
     for plan in plans_override or plans():
         try:
             records.append(acquire(plan, out))
-        except Exception as exc:  # noqa: BLE001 -- manifest records every failure
+        except Exception as exc:
             errors[plan.source_id] = str(exc)[:300]
     out_path = write_registry(records, run_id)
     manifest.notes = {

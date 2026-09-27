@@ -365,6 +365,7 @@ def check_contamination(
             threshold=ngram_threshold,
         )
 
+        doc_ngram_item_ids: set[str] = set()
         for key, overlap in ngram_hits:
             item = benchmark_index.items[key]
             bench = item.benchmark
@@ -379,6 +380,7 @@ def check_contamination(
             )
             result.hits.append(hit)
             result.reports[bench].hits.append(hit)
+            doc_ngram_item_ids.add(item.item_id)
             doc_contaminated = True
 
             if doc.id not in contaminated_doc_ids:
@@ -387,10 +389,11 @@ def check_contamination(
 
         # Optional embedding check (only if not already contaminated by ngrams)
         if check_embeddings and benchmark_index.embeddings is not None:
-            # seen (train_id, benchmark_item_id) pairs so far -- replacing the
-            # any() scan over every accumulated hit, which was O(total hits)
-            # per embedding candidate
-            seen_pairs = {(h.train_id, h.benchmark_item_id) for h in result.hits}
+            # Skip ids this doc already hit via ngrams: a per-doc set built in
+            # the loop above. (A set rebuilt per doc from EVERY accumulated hit
+            # was still O(docs x total hits) -- only this doc's own hits can
+            # ever carry its train_id.)
+            seen_ids = doc_ngram_item_ids
 
             # One unfiltered query per document, partitioned by benchmark
             # (identical hit set; the encoder is cached, and this encodes the
@@ -406,10 +409,10 @@ def check_contamination(
                 if bench not in wanted_benchmarks:
                     continue
 
-                # Skip if already found via ngrams
-                if (doc.id, item.item_id) in seen_pairs:
+                # Skip if already found via ngrams (or an earlier embedding hit)
+                if item.item_id in seen_ids:
                     continue
-                seen_pairs.add((doc.id, item.item_id))
+                seen_ids.add(item.item_id)
 
                 hit = ContaminationHit(
                     train_id=doc.id,

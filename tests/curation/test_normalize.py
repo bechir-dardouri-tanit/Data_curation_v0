@@ -7,7 +7,7 @@ model handle and the store paths are all injected/monkeypatched per test.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -22,7 +22,7 @@ def _record() -> SourceRecord:
         url_or_hf_id="org/ds",
         content_sha256="0" * 64,
         n_rows=4,
-        downloaded_at=datetime.now(timezone.utc),
+        downloaded_at=datetime.now(UTC),
     )
 
 
@@ -47,16 +47,14 @@ def test_drop_accounting_counts_every_row(
     drop table was always zero -- the drops it named (mapper-None filters) were
     exactly the ones not counted."""
     rows = [
-        {"field": "biology", "question": "kept row"},          # kept
-        {"field": "chemistry", "question": "filtered row"},    # mapper returns None
-        {"question": "boom"},                                   # mapper raises
-        {"field": "biology", "question": "lid-poisoned"},       # detect_lang raises
+        {"field": "biology", "question": "kept row"},  # kept
+        {"field": "chemistry", "question": "filtered row"},  # mapper returns None
+        {"question": "boom"},  # mapper raises
+        {"field": "biology", "question": "lid-poisoned"},  # detect_lang raises
     ]
     path = _jsonl(tmp_path, rows)
     monkeypatch.setattr(normalize, "iter_source_files", lambda record: iter([path]))
-    monkeypatch.setattr(
-        "medrl.curation.store.read_registry", lambda run_id: [_record()]
-    )
+    monkeypatch.setattr("medrl.curation.store.read_registry", lambda run_id: [_record()])
 
     # force a genuine mapper exception (the real mapper None-filters instead)
     real_mapper = normalize.MAPPERS["generalthought_biology"]
@@ -78,7 +76,11 @@ def test_drop_accounting_counts_every_row(
     monkeypatch.setattr(normalize, "detect_lang", fake_detect)
 
     counts: dict[str, int] = {"rows_raw": 0, "mapper_none": 0, "errored": 0, "kept": 0}
-    items = list(normalize.materialize_source("generalthought_biology", {"generalthought_biology": _record()}, counts))
+    items = list(
+        normalize.materialize_source(
+            "generalthought_biology", {"generalthought_biology": _record()}, counts
+        )
+    )
 
     assert counts == {"rows_raw": 4, "mapper_none": 1, "errored": 2, "kept": 1}
     assert [it.id for it in items] == ["generalthought_biology:0:0"]
@@ -134,6 +136,7 @@ def test_glotlid_absence_is_observable_not_silent(
 ) -> None:
     """Regression: 'from gltPID import GlotLID' always raises, silently swallowed
     per row -- the second opinion could never run and nothing said so."""
+
     def _boom():
         raise ModuleNotFoundError("No module named 'gltPID'")
 

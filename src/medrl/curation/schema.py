@@ -16,8 +16,7 @@ Two audit invariants:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from enum import StrEnum
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -179,7 +178,7 @@ class StageError(RuntimeError):
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 __all__ = [

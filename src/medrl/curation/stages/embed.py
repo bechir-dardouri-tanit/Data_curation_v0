@@ -24,7 +24,9 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import httpx
 import numpy as np
@@ -38,7 +40,7 @@ BATCH_TEXTS = 128
 CHUNK_ITEMS = 50_000
 
 
-def fp16_bytes(vec) -> bytes:
+def fp16_bytes(vec: list[float] | Any) -> bytes:
     """Full-dim vector -> little-endian fp16 bytes (the store format)."""
     return np.asarray(vec, dtype="<f2").tobytes()
 
@@ -65,7 +67,8 @@ async def _embed_all(base_url: str, model: str, texts: list[str]) -> list[np.nda
                 for attempt in range(4):
                     try:
                         r = await client.post(
-                            f"{base_url}/v1/embeddings", json={"model": model, "input": batch})
+                            f"{base_url}/v1/embeddings", json={"model": model, "input": batch}
+                        )
                         if r.status_code in (429, 500, 502, 503):
                             raise httpx.HTTPError(f"status {r.status_code}")
                         r.raise_for_status()
@@ -78,7 +81,7 @@ async def _embed_all(base_url: str, model: str, texts: list[str]) -> list[np.nda
                         await asyncio.sleep(2**attempt)
                 raise StageError(f"embedding batch failed after retries: {last_err}")
 
-        awaits = [one(lo, texts[lo:lo + BATCH_TEXTS]) for lo in range(0, len(texts), BATCH_TEXTS)]
+        awaits = [one(lo, texts[lo : lo + BATCH_TEXTS]) for lo in range(0, len(texts), BATCH_TEXTS)]
         await asyncio.gather(*awaits)
 
     if any(v is None for v in out):
@@ -109,18 +112,26 @@ def run_embed(
                 embedded_prev[done.id] = done.embedding
     out = store.reset_dir(out_dir)
     manifest = StageManifest(
-        run_id=run_id, stage=output_stage, started_at=started,
-        config={"model": model, "base_url": base_url,
-                "dims_store": THRESHOLDS.embed_dim_store, "dims_index": THRESHOLDS.embed_dim_index},
-        thresholds={"semantic_dup": THRESHOLDS.semantic_dup_threshold,
-                    "semantic_contam": THRESHOLDS.semantic_contam_threshold},
+        run_id=run_id,
+        stage=output_stage,
+        started_at=started,
+        config={
+            "model": model,
+            "base_url": base_url,
+            "dims_store": THRESHOLDS.embed_dim_store,
+            "dims_index": THRESHOLDS.embed_dim_index,
+        },
+        thresholds={
+            "semantic_dup": THRESHOLDS.semantic_dup_threshold,
+            "semantic_contam": THRESHOLDS.semantic_contam_threshold,
+        },
     )
 
     n_total = n_already = n_embedded = 0
     t0 = time.monotonic()
     dim: int | None = None
 
-    def stream_input():
+    def stream_input() -> Iterator[CorpusItem]:
         nonlocal n_total, n_already
         for i, it in enumerate(store.iter_items(inp)):
             if limit is not None and i >= limit:
@@ -172,9 +183,13 @@ def run_embed(
     manifest.rows_out = store.count_items(out)
     manifest.input_sha256 = store.content_sha256(inp)
     manifest.output_sha256 = store.content_sha256(out)
-    manifest.notes = {"embedded": n_embedded, "already_embedded": n_already,
-                      "wall_s": round(time.monotonic() - t0, 1),
-                      "ann_index": str(index_path), "dim": dim}
+    manifest.notes = {
+        "embedded": n_embedded,
+        "already_embedded": n_already,
+        "wall_s": round(time.monotonic() - t0, 1),
+        "ann_index": str(index_path),
+        "dim": dim,
+    }
     if manifest.rows_in != manifest.rows_out:
         raise StageError(
             f"S5: rows_in={manifest.rows_in} != rows_out={manifest.rows_out} "
@@ -187,8 +202,11 @@ def _build_usearch_index(snapshot_dir: Path, dim_hint: int | None) -> Path:
     """HNSW over MRL-truncated dims; an id-map JSON sits beside the index."""
     from usearch.index import Index
 
-    index = Index(ndim=dim_hint and min(dim_hint, THRESHOLDS.embed_dim_index) or THRESHOLDS.embed_dim_index,
-                  metric="cos", dtype="f16")
+    index = Index(
+        ndim=(dim_hint and min(dim_hint, THRESHOLDS.embed_dim_index)) or THRESHOLDS.embed_dim_index,
+        metric="cos",
+        dtype="f16",
+    )
     id_map: dict[str, str] = {}
     for key, it in enumerate(store.iter_items(snapshot_dir)):
         if it.embedding is None:

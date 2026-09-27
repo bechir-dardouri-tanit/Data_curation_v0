@@ -44,10 +44,13 @@ async def test_chat_success_and_usage():
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         assert body["messages"][0]["content"] == "hi"
-        return httpx.Response(200, json={
-            "choices": [{"message": {"content": "hello", "reasoning_content": None}}],
-            "usage": {"completion_tokens": 5},
-        })
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "hello", "reasoning_content": None}}],
+                "usage": {"completion_tokens": 5},
+            },
+        )
 
     gw = Gateway(ServerHandle(model="m", port=1), max_concurrency=4)
     out = await gw.chat(_mock_client(handler), [{"role": "user", "content": "hi"}])
@@ -85,7 +88,9 @@ async def test_run_generation_resumes_and_records(tmp_path):
     out.write_text(json.dumps({"key": "a::0", "content": "cached"}) + "\n")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"choices": [{"message": {"content": "fresh"}}], "usage": {}})
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "fresh"}}], "usage": {}}
+        )
 
     factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))  # noqa: E731
     gw = Gateway(ServerHandle(model="m", port=1), max_concurrency=2)
@@ -95,7 +100,7 @@ async def test_run_generation_resumes_and_records(tmp_path):
     ]
     stats = await run_generation(gw, jobs, out, client_factory=factory)
     assert stats["resumed"] == 1 and stats["ran"] == 1 and stats["failed"] == 0
-    lines = [json.loads(l) for l in out.read_text().splitlines()]
+    lines = [json.loads(line) for line in out.read_text().splitlines()]
     assert lines[0]["content"] == "cached" and lines[1]["content"] == "fresh"
     assert "error" not in lines[1]
 
@@ -110,7 +115,9 @@ async def test_run_generation_records_errors_without_dying(tmp_path):
     factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))  # noqa: E731
     gw = Gateway(ServerHandle(model="m", port=1), max_retries=1)
     stats = await run_generation(
-        gw, [{"key": "a::0", "messages": [{"role": "user", "content": "q"}]}], out,
+        gw,
+        [{"key": "a::0", "messages": [{"role": "user", "content": "q"}]}],
+        out,
         client_factory=factory,
     )
     assert stats["failed"] == 1
@@ -142,18 +149,45 @@ async def test_run_generation_completes_under_interleaving_without_deadlock(tmp_
 
 
 @pytest.mark.asyncio
-async def test_gateway_reusable_across_event_loops(tmp_path):
-    """Regression: S11 calls asyncio.run(run_generation(...)) once per chunk
-    with one Gateway. An asyncio primitive contended on loop 1 raises 'is bound
-    to a different event loop' when contended on loop 2 (CPython 3.12); the
-    gate must be per-loop."""
+async def test_aimd_ramp_lifts_waiters_and_never_exceeds_cap(tmp_path):
+    """Regression: AIMD used to REPLACE the live semaphore, orphaning queued
+    waiters -- the backlog ran at the initial target forever while the target
+    grew on paper (and each replacement transiently admitted a fresh
+    full-capacity batch on top of in-flight holders). Waiters must ride the
+    raised target (peak above the initial 8) and the cap must hold."""
+    out = tmp_path / "gen.jsonl"
     transport = _YieldingTransport(
         lambda request: httpx.Response(
             200, json={"choices": [{"message": {"content": "ok"}}], "usage": {}}
         )
     )
     factory = lambda: httpx.AsyncClient(transport=transport)  # noqa: E731
-    gw = Gateway(ServerHandle(model="m", port=1), max_concurrency=4)
+    gw = Gateway(ServerHandle(model="m", port=1), max_concurrency=32)
+    jobs = [{"key": f"j{i}::0", "messages": [{"role": "user", "content": "q"}]} for i in range(40)]
+    stats = await asyncio.wait_for(
+        run_generation(gw, jobs, out, client_factory=factory), timeout=30
+    )
+    assert stats["ran"] == 40 and stats["failed"] == 0
+    # +1 per 8 successes over 40 jobs lifts the target to 13; queued workers
+    # must actually be admitted past the initial 8.
+    assert transport.peak > 8, "AIMD ramp must lift the queued backlog past its initial target"
+    assert transport.peak <= 32, "AIMD cap must hold"
+
+
+def test_gateway_reusable_across_event_loops(tmp_path):
+    """Regression: S11 calls asyncio.run(run_generation(...)) once per chunk
+    with one Gateway. An asyncio primitive contended on loop 1 raises 'is bound
+    to a different event loop' when contended on loop 2 (CPython 3.12); the
+    gate must be rebuilt per loop. 32 workers contend against an initial
+    in-flight target of 8, so waiters really queue on the gate each round --
+    the same saturation that killed chunk 3 of a 10k-row judge batch."""
+    transport = _YieldingTransport(
+        lambda request: httpx.Response(
+            200, json={"choices": [{"message": {"content": "ok"}}], "usage": {}}
+        )
+    )
+    factory = lambda: httpx.AsyncClient(transport=transport)  # noqa: E731
+    gw = Gateway(ServerHandle(model="m", port=1), max_concurrency=32)
 
     def make_jobs(tag: str) -> list[dict]:
         return [
@@ -161,10 +195,14 @@ async def test_gateway_reusable_across_event_loops(tmp_path):
             for i in range(50)
         ]
 
-    for chunk in ("a", "b", "c"):  # three asyncio.run passes over one gateway
-        stats = await asyncio.wait_for(
-            run_generation(gw, make_jobs(chunk), tmp_path / "gen.jsonl", client_factory=factory),
-            timeout=30,
+    for chunk in ("a", "b", "c"):  # three fresh event loops over one gateway
+        stats = asyncio.run(
+            asyncio.wait_for(
+                run_generation(
+                    gw, make_jobs(chunk), tmp_path / "gen.jsonl", client_factory=factory
+                ),
+                timeout=30,
+            )
         )
         assert stats["ran"] == 50
 
@@ -178,12 +216,16 @@ async def test_run_generation_reruns_errored_keys(tmp_path):
     out.write_text(json.dumps({"key": "a::0", "error": "boom"}) + "\n")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"choices": [{"message": {"content": "fresh"}}], "usage": {}})
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "fresh"}}], "usage": {}}
+        )
 
     factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))  # noqa: E731
     gw = Gateway(ServerHandle(model="m", port=1))
     stats = await run_generation(
-        gw, [{"key": "a::0", "messages": [{"role": "user", "content": "q"}]}], out,
+        gw,
+        [{"key": "a::0", "messages": [{"role": "user", "content": "q"}]}],
+        out,
         client_factory=factory,
     )
     assert stats["resumed"] == 0 and stats["ran"] == 1

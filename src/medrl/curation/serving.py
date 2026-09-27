@@ -90,7 +90,7 @@ class Gateway:
         self.timeout_s = timeout_s
         self.max_retries = max_retries
         self.rng = random.Random(seed)
-        self._inflight = 8
+        self._inflight = min(8, max_concurrency)
         self._active = 0
         self._gate: asyncio.Condition | None = None
         self._gate_loop: asyncio.AbstractEventLoop | None = None
@@ -219,7 +219,7 @@ async def run_generation(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     errored: dict[str, bool] = {}
     if out_path.exists():
-        with open(out_path) as f:
+        with out_path.open() as f:
             for line in f:
                 try:
                     rec = json.loads(line)
@@ -230,7 +230,12 @@ async def run_generation(
     done = {k for k, err in errored.items() if not err}
 
     todo = [j for j in jobs if j["key"] not in done]
-    stats = {"total": len(jobs), "resumed": len(jobs) - len(todo), "ran": 0, "failed": 0}
+    stats: dict[str, Any] = {
+        "total": len(jobs),
+        "resumed": len(jobs) - len(todo),
+        "ran": 0,
+        "failed": 0,
+    }
     if not todo:
         stats["concurrency_note"] = concurrency_note or f"aimd->{gateway._inflight}"
         return stats
@@ -255,20 +260,24 @@ async def run_generation(
             except ServingError as exc:
                 async with lock:
                     stats["failed"] += 1
-                    with open(out_path, "a") as f:
+                    with out_path.open("a") as f:
                         f.write(json.dumps({"key": job["key"], "error": str(exc)[:200]}) + "\n")
                 return
-        record = {"key": job["key"], **resp, "wall_s": round((utcnow() - started).total_seconds(), 3)}
+        record = {
+            "key": job["key"],
+            **resp,
+            "wall_s": round((utcnow() - started).total_seconds(), 3),
+        }
         async with lock:
             stats["ran"] += 1
-            with open(out_path, "a") as f:
+            with out_path.open("a") as f:
                 f.write(json.dumps(record) + "\n")
 
     # Worker pool, not a Task per job: gather-all materialized one coroutine +
     # Task per remaining job up front (tens of GB at S12's 20M+ jobs, before
     # the first response). Workers ~= the concurrency cap; the gateway's AIMD
     # gate does the throttling, so extra workers would only queue.
-    queue: asyncio.Queue = asyncio.Queue()
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     for j in todo:
         queue.put_nowait(j)
     n_workers = max(1, min(len(todo), int(getattr(gateway, "max_concurrency", 64)) or 64))
@@ -291,11 +300,25 @@ async def run_generation(
     return stats
 
 
-def write_generation_manifest(out_path: Path, model: str, vllm_version: str, seed_base: int, **kw: Any) -> None:
+def write_generation_manifest(
+    out_path: Path, model: str, vllm_version: str, seed_base: int, **kw: Any
+) -> None:
     """Pin model + version + seed base beside the JSONL (provenance rule)."""
-    manifest = {"model": model, "vllm_version": vllm_version, "seed_base": seed_base,
-                "written_at": utcnow().isoformat(), **kw}
+    manifest = {
+        "model": model,
+        "vllm_version": vllm_version,
+        "seed_base": seed_base,
+        "written_at": utcnow().isoformat(),
+        **kw,
+    }
     Path(str(out_path) + ".manifest.json").write_text(json.dumps(manifest, indent=2))
 
 
-__all__ = ["Gateway", "ServerHandle", "ServingError", "run_generation", "wait_healthy", "write_generation_manifest"]
+__all__ = [
+    "Gateway",
+    "ServerHandle",
+    "ServingError",
+    "run_generation",
+    "wait_healthy",
+    "write_generation_manifest",
+]

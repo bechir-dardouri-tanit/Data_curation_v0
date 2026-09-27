@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -88,9 +89,7 @@ def _self_join_bruteforce(
     return dup_of
 
 
-def _self_join_ann(
-    snapshot_dir: str, threshold: float
-) -> dict[str, tuple[str, float]]:
+def _self_join_ann(snapshot_dir: str, threshold: float) -> dict[str, tuple[str, float]]:
     """usearch recall at truncated dims -> full-dim verification -> flags."""
     # Only the fp16 blobs are held in RAM (not the full CorpusItem -- message
     # text is the bulk of an item at 2.5M rows); candidates re-read vectors
@@ -113,14 +112,19 @@ def _self_join_ann(
 
     index = Index(ndim=THRESHOLDS.embed_dim_index, metric="cos", dtype="f16")
     index.load(str(index_path))
-    key_to_id = {int(k): v for k, v in json.loads(
-        (index_path.parent / "ann_ids.json").read_text()).items()}
+    key_to_id = {
+        int(k): v for k, v in json.loads((index_path.parent / "ann_ids.json").read_text()).items()
+    }
     dup_of: dict[str, tuple[str, float]] = {}
     for iid in ids:
         v_full = bytes_to_vec(blobs[iid])
         hits = index.search(v_full[: index.ndim], count=2)
-        for hit in (hits if hits.shape else [hits]):
-            other_id = key_to_id.get(int(hit["key"]))
+        # usearch returns Matches / BatchMatches / list depending on batch
+        # shape; flatten defensively (its type stubs are union-wide).
+        flat = list(hits) if isinstance(hits, list) else [hits]
+        for hit in flat:
+            key = hit["key"] if isinstance(hit, dict) else getattr(hit, "key", None)
+            other_id = key_to_id.get(int(key)) if key is not None else None
             if other_id is None or other_id == iid:
                 continue
             decision = decide_self(v_full, other_id, bytes_to_vec(blobs[other_id]), threshold)
@@ -147,9 +151,13 @@ def run_decontam_sem(
     inp = store.stage_dir(run_id, input_stage)
     out = store.reset_dir(store.stage_dir(run_id, output_stage))
     manifest = StageManifest(
-        run_id=run_id, stage=output_stage, started_at=started,
-        thresholds={"semantic_dup": THRESHOLDS.semantic_dup_threshold,
-                    "semantic_contam": THRESHOLDS.semantic_contam_threshold},
+        run_id=run_id,
+        stage=output_stage,
+        started_at=started,
+        thresholds={
+            "semantic_dup": THRESHOLDS.semantic_dup_threshold,
+            "semantic_contam": THRESHOLDS.semantic_contam_threshold,
+        },
         config={"bench_vectors": bench_vectors_path},
     )
 
@@ -165,7 +173,7 @@ def run_decontam_sem(
     bench_matrix: np.ndarray | None = None
     bench_of_row: list[str] = []
     if bench_vectors_path:
-        blob = json.loads(open(bench_vectors_path).read())
+        blob = json.loads(Path(bench_vectors_path).read_text())
         npz = np.load(bench_vectors_path.replace(".json", ".npz"))
         rows: list[np.ndarray] = []
         for benchmark, entries in blob.items():
@@ -188,9 +196,9 @@ def run_decontam_sem(
             out_buf.clear()
 
     for it in store.iter_items(inp):
-        updates: dict = {}
+        updates: dict[str, Any] = {}
         if it.id in dup_of and not it.flags.f_dup_semantic:
-            other, c = dup_of[it.id]
+            other, _cos = dup_of[it.id]
             updates["dup_of"] = other
             updates["flags"] = it.flags.model_copy(update={"f_dup_semantic": True})
             n_dup += 1
@@ -214,10 +222,15 @@ def run_decontam_sem(
     manifest.rows_in = manifest.rows_out = store.count_items(inp)
     manifest.input_sha256 = store.content_sha256(inp)
     manifest.output_sha256 = store.content_sha256(out)
-    manifest.flag_rates = {"f_dup_semantic": {"_all": n_dup / max(manifest.rows_in, 1)},
-                           "f_contam_semantic": {"_all": n_contam / max(manifest.rows_in, 1)}}
-    manifest.notes = {"semantic_dup_pairs": n_dup, "semantic_contam_hits": n_contam,
-                      "per_benchmark_hits": per_bench_hits}
+    manifest.flag_rates = {
+        "f_dup_semantic": {"_all": n_dup / max(manifest.rows_in, 1)},
+        "f_contam_semantic": {"_all": n_contam / max(manifest.rows_in, 1)},
+    }
+    manifest.notes = {
+        "semantic_dup_pairs": n_dup,
+        "semantic_contam_hits": n_contam,
+        "per_benchmark_hits": per_bench_hits,
+    }
     return manifest
 
 

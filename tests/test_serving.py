@@ -154,7 +154,7 @@ def test_fr_preset_is_french_only() -> None:
 
 def test_mcqa_prompt_carries_the_contract() -> None:
     prompt = build_mcqa_user("What is the dose?", ["1 mg", "2 mg", "5 mg", "10 mg"])
-    assert prompt.rstrip().endswith("End with 'Answer: <LETTER>'.")
+    assert prompt.rstrip().endswith("Your final answer:")
     assert "A. 1 mg" in prompt and "D. 10 mg" in prompt
     # The grammar the guided decoder enforces matches the contract sentence.
     assert MCQA_GRAMMAR == "Answer: [A-E]"

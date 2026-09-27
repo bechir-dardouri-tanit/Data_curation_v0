@@ -61,9 +61,7 @@ def test_interrupted_pass_resumes_without_reembedding(
     assert all(it.embedding is not None for it in rows.values())
 
 
-def test_resume_fills_only_missing_items(
-    scratch: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_resume_fills_only_missing_items(scratch: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A snapshot partially written before the crash: harvested ids skip the
     HTTP pass, unseen ids go through the normal embed+chunk path (no per-item
     part files)."""

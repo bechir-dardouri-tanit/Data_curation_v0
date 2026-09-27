@@ -159,9 +159,7 @@ def _recipe_corpus(tmp_path: Path) -> Path:
         _item("generalthought_biology:g1", "generalthought_biology", flags=Flags(f_empty=True))
     )
     for i in range(3):
-        items.append(
-            _item(f"medical_r1_distill:d{i}", "medical_r1_distill", difficulty_band="rl")
-        )
+        items.append(_item(f"medical_r1_distill:d{i}", "medical_r1_distill", difficulty_band="rl"))
     for i in range(2):
         items.append(_item(f"m23k_tokenized:m{i}", "m23k_tokenized", difficulty_band="sft1"))
     for i in range(2):
@@ -303,16 +301,24 @@ def test_recipe_without_survivor_macro_omits_survivor_counts(tmp_path: Path) -> 
 def test_missing_recipe_raises(tmp_path: Path) -> None:
     with pytest.raises(StageError, match="does not exist"):
         run_mixture(
-            "run-t", tmp_path, "nope", input_dir=_tiny_corpus(tmp_path),
-            output_dir=tmp_path / "o", experiments_dir=tmp_path / "e",
+            "run-t",
+            tmp_path,
+            "nope",
+            input_dir=_tiny_corpus(tmp_path),
+            output_dir=tmp_path / "o",
+            experiments_dir=tmp_path / "e",
         )
 
 
 def test_out_name_is_never_a_path(tmp_path: Path) -> None:
     with pytest.raises(StageError, match="plain phase name"):
         run_mixture(
-            "run-t", tmp_path, "../evil", input_dir=_tiny_corpus(tmp_path),
-            output_dir=tmp_path / "o", experiments_dir=tmp_path / "e",
+            "run-t",
+            tmp_path,
+            "../evil",
+            input_dir=_tiny_corpus(tmp_path),
+            output_dir=tmp_path / "o",
+            experiments_dir=tmp_path / "e",
         )
 
 
@@ -336,8 +342,12 @@ def test_missing_input_snapshot_raises(tmp_path: Path) -> None:
     sql_dir = _write_recipe(tmp_path, "phase_t", SQL_TINY_WEIGHTED)
     with pytest.raises(StageError, match="does not exist"):
         run_mixture(
-            "run-t", sql_dir, "phase_t", input_dir=tmp_path / "missing",
-            output_dir=tmp_path / "o", experiments_dir=tmp_path / "e",
+            "run-t",
+            sql_dir,
+            "phase_t",
+            input_dir=tmp_path / "missing",
+            output_dir=tmp_path / "o",
+            experiments_dir=tmp_path / "e",
         )
 
 
@@ -354,7 +364,11 @@ def test_output_must_differ_from_input(tmp_path: Path) -> None:
     sql_dir = _write_recipe(tmp_path, "phase_t", SQL_TINY_WEIGHTED)
     with pytest.raises(StageError, match="must differ"):
         run_mixture(
-            "run-t", sql_dir, "phase_t", input_dir=inp, output_dir=inp,
+            "run-t",
+            sql_dir,
+            "phase_t",
+            input_dir=inp,
+            output_dir=inp,
             experiments_dir=tmp_path / "e",
         )
 
@@ -363,11 +377,15 @@ def test_rerun_replaces_snapshot_instead_of_appending(tmp_path: Path) -> None:
     inp = _tiny_corpus(tmp_path)
     out = tmp_path / "out"
     exp = tmp_path / "e"
-    sql_dir = _write_recipe(tmp_path, "all", "SELECT id, source FROM corpus WHERE NOT flags_dup_exact ORDER BY id;")
+    sql_dir = _write_recipe(
+        tmp_path, "all", "SELECT id, source FROM corpus WHERE NOT flags_dup_exact ORDER BY id;"
+    )
     run_mixture("run-t", sql_dir, "all", input_dir=inp, output_dir=out, experiments_dir=exp)
     assert store.count_items(out) == 7
     narrower = _write_recipe(
-        tmp_path, "alpha_only", "SELECT id, source FROM corpus WHERE source = 'alpha' AND NOT flags_dup_exact ORDER BY id;"
+        tmp_path,
+        "alpha_only",
+        "SELECT id, source FROM corpus WHERE source = 'alpha' AND NOT flags_dup_exact ORDER BY id;",
     )
     m2 = run_mixture(
         "run-t", narrower, "alpha_only", input_dir=inp, output_dir=out, experiments_dir=exp
@@ -376,7 +394,9 @@ def test_rerun_replaces_snapshot_instead_of_appending(tmp_path: Path) -> None:
     assert m2.rows_out == 3
 
 
-def test_duckdb_below_session_seed_era_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_duckdb_below_session_seed_era_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(duckdb, "__version__", "0.9.2")
     sql_dir = _write_recipe(tmp_path, "phase_t", SQL_TINY_WEIGHTED)
     with pytest.raises(StageError, match="duckdb>="):
@@ -388,7 +408,9 @@ def test_duckdb_below_session_seed_era_refused(tmp_path: Path, monkeypatch: pyte
 # --------------------------------------------------------------------------
 
 
-def test_default_paths_resolve_newest_snapshot_and_experiments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_paths_resolve_newest_snapshot_and_experiments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(store, "SCRATCH_ROOT", tmp_path / "scratch")
     monkeypatch.setattr(store, "EXPERIMENTS_ROOT", tmp_path / "experiments")
     older = store.stage_dir("run-x", "02_structural")
@@ -403,16 +425,16 @@ def test_default_paths_resolve_newest_snapshot_and_experiments(tmp_path: Path, m
     store.write_items(items, inp)
 
     sql_dir = _write_recipe(
-        tmp_path, "phase_t", "SELECT id, source FROM corpus WHERE NOT flags_dup_minhash ORDER BY id;"
+        tmp_path,
+        "phase_t",
+        "SELECT id, source FROM corpus WHERE NOT flags_dup_minhash ORDER BY id;",
     )
     m = run_mixture("run-x", sql_dir, "phase_t")
 
     assert m.config["input_stage"] == "09_answers"
     assert m.rows_in == 4 and m.rows_out == 3
     assert (tmp_path / "experiments" / "run-x" / "mixture_spec.sql").is_file()
-    assert (
-        tmp_path / "experiments" / "run-x" / "15_mixture_phase_t.ids.jsonl"
-    ).is_file()
+    assert (tmp_path / "experiments" / "run-x" / "15_mixture_phase_t.ids.jsonl").is_file()
     snap = tmp_path / "scratch" / "run-x" / "15_mixture_phase_t"
     assert {it.id for it in store.iter_items(snap)} == {"alpha:0", "alpha:1", "beta:1"}
 
@@ -484,8 +506,12 @@ def test_phase3_recipe_60_40_blend(tmp_path: Path) -> None:
     assert m.notes["unique_rows"] == 19  # B unique 11 + R 8
     assert "ii_medical_reasoning_sft:r5" not in ids
     assert "generalthought_biology:g1" not in ids
-    r_ids = [i for i in ids if i.split(":")[0] in
-             {"medical_r1_distill", "m23k_tokenized", "medreason", "huatuo_o1_reasoning"}]
+    r_ids = [
+        i
+        for i in ids
+        if i.split(":")[0]
+        in {"medical_r1_distill", "m23k_tokenized", "medreason", "huatuo_o1_reasoning"}
+    ]
     assert len(r_ids) == 8  # the 40% side is all R survivors
 
 
@@ -549,8 +575,7 @@ def test_execute_spec_seeded_draw_is_deterministic_at_scale(tmp_path: Path) -> N
 
     script = "SELECT setseed(0.42);\nSELECT id FROM corpus ORDER BY random() LIMIT 10;"
     draws = {
-        tuple(row["id"] for row in mixture_mod._execute_spec([p], script)[1])
-        for _ in range(3)
+        tuple(row["id"] for row in mixture_mod._execute_spec([p], script)[1]) for _ in range(3)
     }
     assert len(draws) == 1, f"seeded draw differed across runs: {len(draws)} distinct results"
 

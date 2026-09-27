@@ -412,7 +412,9 @@ def stage_entry(
     if rubric_changed and vpath.exists():
         rotated = vpath.with_name(f"{vpath.name}.stale-{utcnow().strftime('%Y%m%dT%H%M%S')}")
         vpath.rename(rotated)
-        log.warning("S11: axes/model changed since the last run; rotated stale verdicts to %s", rotated)
+        log.warning(
+            "S11: axes/model changed since the last run; rotated stale verdicts to %s", rotated
+        )
     meta_path.write_text(json.dumps(rubric))
 
     # Runner resume contract: a re-run replaces its own snapshot. Before replacing it,

@@ -332,8 +332,11 @@ def test_missing_input_snapshot_fails_loudly(tmp_path: Path) -> None:
     index = _make_index([("medqa", "m1", _MEDQA_QUESTION)])
     with pytest.raises(StageError, match="does not exist"):
         decontam_ngram.stage_entry(
-            "test-run", benchmarks=["medqa"], index=index,
-            input_dir=tmp_path / "nope", output_dir=tmp_path / "out",
+            "test-run",
+            benchmarks=["medqa"],
+            index=index,
+            input_dir=tmp_path / "nope",
+            output_dir=tmp_path / "out",
         )
 
 
@@ -343,6 +346,9 @@ def test_empty_input_snapshot_fails_loudly(tmp_path: Path) -> None:
     index = _make_index([("medqa", "m1", _MEDQA_QUESTION)])
     with pytest.raises(StageError, match="empty"):
         decontam_ngram.stage_entry(
-            "test-run", benchmarks=["medqa"], index=index,
-            input_dir=inp, output_dir=tmp_path / "out",
+            "test-run",
+            benchmarks=["medqa"],
+            index=index,
+            input_dir=inp,
+            output_dir=tmp_path / "out",
         )

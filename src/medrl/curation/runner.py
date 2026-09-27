@@ -16,8 +16,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 
 from medrl.curation import store
 from medrl.curation.schema import StageError, StageManifest, utcnow
@@ -25,7 +25,9 @@ from medrl.curation.schema import StageError, StageManifest, utcnow
 STAGES: dict[str, Callable[[str], StageManifest]] = {}
 
 
-def stage(name: str) -> Callable:
+def stage(
+    name: str,
+) -> Callable[[Callable[[str], StageManifest]], Callable[[str], StageManifest]]:
     def register(fn: Callable[[str], StageManifest]) -> Callable[[str], StageManifest]:
         STAGES[name] = fn
         return fn
@@ -39,10 +41,16 @@ def _wrap(run_id: str, name: str, fn: Callable[[str], StageManifest]) -> StageMa
     manifest = store.seal_manifest(manifest)
     store.save_manifest(manifest)
     copied = store.mirror_light(run_id)
-    print(json.dumps({
-        "stage": name, "rows_out": manifest.rows_out, "wall_s": manifest.wall_s,
-        "mirrored": [str(p) for p in copied],
-    }))
+    print(
+        json.dumps(
+            {
+                "stage": name,
+                "rows_out": manifest.rows_out,
+                "wall_s": manifest.wall_s,
+                "mirrored": [str(p) for p in copied],
+            }
+        )
+    )
     return manifest
 
 
@@ -84,7 +92,9 @@ def run_mixture_default(
     from medrl.curation.stages import mixture as mixture_run
 
     for phase in MIXTURE_PHASES:
-        manifest = mixture_run.run_mixture(run_id, sql_dir=sql_dir, out_name=phase, input_dir=input_dir)
+        manifest = mixture_run.run_mixture(
+            run_id, sql_dir=sql_dir, out_name=phase, input_dir=input_dir
+        )
         if phase != MIXTURE_PHASES[-1]:
             store.save_manifest(store.seal_manifest(manifest))
         last = manifest
@@ -99,9 +109,9 @@ def register_builtin_stages() -> None:
         answers,
         concept,
         coverage,
-        dedup_lex,
         decontam_ngram,
         decontam_sem,
+        dedup_lex,
         difficulty,
         embed,
         judge,

@@ -18,6 +18,7 @@ from medrl.curation.schema import (
 from medrl.curation.thresholds import THRESHOLDS, Thresholds, snapshot
 
 __all__ = [
+    "THRESHOLDS",
     "AnswerType",
     "CorpusItem",
     "DifficultyBand",
@@ -26,7 +27,6 @@ __all__ = [
     "SourceRecord",
     "StageError",
     "StageManifest",
-    "THRESHOLDS",
     "Thresholds",
     "snapshot",
 ]

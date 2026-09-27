@@ -64,7 +64,9 @@ def test_ngram_hits_partition_per_benchmark_with_one_query_per_doc() -> None:
     assert result.clean_docs == {"d3"}
     per_bench = {(h.benchmark, h.benchmark_item_id) for h in result.hits}
     assert per_bench == {("medqa", "m1"), ("medmcqa", "mc1")}
-    assert {("medqa", "m1")} <= {(h.benchmark, h.benchmark_item_id) for h in result.reports["medqa"].hits}
+    assert {("medqa", "m1")} <= {
+        (h.benchmark, h.benchmark_item_id) for h in result.reports["medqa"].hits
+    }
     assert result.reports["medqa"].contaminated_items == 1
 
 
@@ -80,9 +82,7 @@ def test_ngram_partition_equivalent_to_old_per_benchmark_loop() -> None:
                 old_hits.add((doc.id, idx.items[key].item_id, round(overlap, 9)))
 
     result = check_contamination(docs, idx, ngram_threshold=0.8)
-    new_hits = {
-        (h.train_id, h.benchmark_item_id, round(h.ngram_overlap, 9)) for h in result.hits
-    }
+    new_hits = {(h.train_id, h.benchmark_item_id, round(h.ngram_overlap, 9)) for h in result.hits}
     assert new_hits == old_hits
 
 
@@ -100,9 +100,7 @@ def test_embedding_hits_skip_ngram_pairs_and_query_once_per_doc(monkeypatch) -> 
 
     monkeypatch.setattr(BenchmarkIndex, "query_embedding", fake_query_embedding)
 
-    result = check_contamination(
-        docs, idx, check_embeddings=True, embedding_threshold=0.9
-    )
+    result = check_contamination(docs, idx, check_embeddings=True, embedding_threshold=0.9)
 
     assert embed_calls == ["<unfiltered>"], "one embedding query per doc, not per (doc, benchmark)"
     pairs = [(h.benchmark, h.benchmark_item_id) for h in result.hits]

@@ -14,13 +14,13 @@ drops a row -- it writes lang/lang_score and the S2 keep-rule decides.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from medrl.core.logging import get_logger
 from medrl.curation.registry import REGISTRY_SOURCES, iter_source_files
-from medrl.curation.schema import AnswerType, CorpusItem, StageError
+from medrl.curation.schema import CorpusItem, StageError, StageManifest
 from medrl.curation.store import reset_dir, stage_dir, write_items
 from medrl.curation.thresholds import THRESHOLDS
 
@@ -39,10 +39,10 @@ _lid_model: Any = None
 _glotlid_model: Any = None
 
 
-def _lid():
+def _lid() -> Any:
     global _lid_model
     if _lid_model is None:
-        import fasttext  # type: ignore[import-not-found]
+        import fasttext  # type: ignore[import-untyped]
 
         cache = Path("/scratch/medrl/curation/models")
         cache.mkdir(parents=True, exist_ok=True)
@@ -55,7 +55,7 @@ def _lid():
     return _lid_model
 
 
-def _glotlid():
+def _glotlid() -> Any:
     global _glotlid_model
     if _glotlid_model is None:
         from gltPID import GlotLID  # type: ignore[import-not-found]  # placeholder id
@@ -163,8 +163,12 @@ def map_ii_medical_reasoning_sft(sid: str, row: dict[str, Any]) -> CorpusItem | 
     msgs = _messages_of(row)
     if not msgs:
         return None
-    return _mk(sid, row.get("id") or row.get("model") or hash(json.dumps(row, sort_keys=True)),
-               messages=msgs, answer_type="none")
+    return _mk(
+        sid,
+        row.get("id") or row.get("model") or hash(json.dumps(row, sort_keys=True)),
+        messages=msgs,
+        answer_type="none",
+    )
 
 
 def map_finemed_sft(sid: str, row: dict[str, Any]) -> CorpusItem | None:
@@ -174,11 +178,19 @@ def map_finemed_sft(sid: str, row: dict[str, Any]) -> CorpusItem | None:
     if not instr or not resp:
         return None
     return _mk(
-        sid, row.get("id") or hash(f"{instr[:128]}{resp[:128]}"),
-        messages=[{"role": "user", "content": str(instr)}, {"role": "assistant", "content": str(resp)}],
+        sid,
+        row.get("id") or hash(f"{instr[:128]}{resp[:128]}"),
+        messages=[
+            {"role": "user", "content": str(instr)},
+            {"role": "assistant", "content": str(resp)},
+        ],
         answer_type="free_text",
-        meta={"quality": row.get("quality"), "complexity": row.get("complexity"),
-              "source_lang": row.get("language"), "instruction_type": row.get("instruction_type")},
+        meta={
+            "quality": row.get("quality"),
+            "complexity": row.get("complexity"),
+            "source_lang": row.get("language"),
+            "instruction_type": row.get("instruction_type"),
+        },
     )
 
 
@@ -186,21 +198,35 @@ def map_chatdoctor_healthcaremagic(sid: str, row: dict[str, Any]) -> CorpusItem 
     instr, resp = row.get("instruction"), row.get("output")
     if not instr or not resp:
         return None
-    return _mk(sid, hash(f"{instr[:128]}"),
-               messages=[{"role": "user", "content": str(instr)}, {"role": "assistant", "content": str(resp)}],
-               answer_type="free_text")  # plain patient-QA, no CoT (verified)
+    return _mk(
+        sid,
+        hash(f"{instr[:128]}"),
+        messages=[
+            {"role": "user", "content": str(instr)},
+            {"role": "assistant", "content": str(resp)},
+        ],
+        answer_type="free_text",
+    )  # plain patient-QA, no CoT (verified)
 
 
 def map_generalthought_biology(sid: str, row: dict[str, Any]) -> CorpusItem | None:
     """Biology subset only; R1-style traces in a reasoning field."""
-    if "biolog" not in str(row.get("field", "")).lower() and "biolog" not in str(row.get("domain", "")).lower():
+    if (
+        "biolog" not in str(row.get("field", "")).lower()
+        and "biolog" not in str(row.get("domain", "")).lower()
+    ):
         return None
-    return _mk(sid, row.get("question_id") or hash(str(row.get("question", ""))[:128]),
-               messages=[{"role": "user", "content": str(row.get("question", ""))},
-                         {"role": "assistant", "content": str(row.get("response", ""))}],
-               thinking=row.get("reasoning") or None,
-               answer=str(row.get("answer")) if row.get("answer") is not None else None,
-               answer_type="free_text")
+    return _mk(
+        sid,
+        row.get("question_id") or hash(str(row.get("question", ""))[:128]),
+        messages=[
+            {"role": "user", "content": str(row.get("question", ""))},
+            {"role": "assistant", "content": str(row.get("response", ""))},
+        ],
+        thinking=row.get("reasoning") or None,
+        answer=str(row.get("answer")) if row.get("answer") is not None else None,
+        answer_type="free_text",
+    )
 
 
 def map_medical_r1_distill(sid: str, row: dict[str, Any]) -> CorpusItem | None:
@@ -212,11 +238,16 @@ def map_medical_r1_distill(sid: str, row: dict[str, Any]) -> CorpusItem | None:
         return None
     response = row.get("response (content)") or row.get("content") or ""
     reasoning = row.get("reasoning (reasoning_content)") or row.get("reasoning_content") or None
-    return _mk(sid, 0,  # id assigned by materialize_source (row position)
-               messages=[{"role": "user", "content": str(q)},
-                         {"role": "assistant", "content": str(response)}],
-               thinking=reasoning,
-               answer_type="free_text")
+    return _mk(
+        sid,
+        0,  # id assigned by materialize_source (row position)
+        messages=[
+            {"role": "user", "content": str(q)},
+            {"role": "assistant", "content": str(response)},
+        ],
+        thinking=reasoning,
+        answer_type="free_text",
+    )
 
 
 def _mcqa_from_row(sid: str, row: dict[str, Any]) -> CorpusItem | None:
@@ -226,10 +257,13 @@ def _mcqa_from_row(sid: str, row: dict[str, Any]) -> CorpusItem | None:
     gold = row.get("answer") or row.get("Answer") or row.get("correct_answer")
     if not q:
         return None
-    item = _mk(sid, row.get("id") or hash(str(q)[:128]),
-               messages=[{"role": "user", "content": str(q)}],
-               thinking=row.get("reasoning") or row.get("RATIONALE") or None,
-               answer=str(gold) if gold is not None else None)
+    item = _mk(
+        sid,
+        row.get("id") or hash(str(q)[:128]),
+        messages=[{"role": "user", "content": str(q)}],
+        thinking=row.get("reasoning") or row.get("RATIONALE") or None,
+        answer=str(gold) if gold is not None else None,
+    )
     if options:
         item.meta["options"] = options
         item.answer_type = "mcqa"
@@ -245,11 +279,16 @@ def map_huatuo_o1(sid: str, row: dict[str, Any]) -> CorpusItem | None:
     q = row.get("question") or row.get("Question")
     if not q:
         return None
-    return _mk(sid, hash(str(q)[:128]),
-               messages=[{"role": "user", "content": str(q)}],
-               thinking=row.get("Long_CoT") or row.get("response") or None,
-               answer=row.get("answer") if not isinstance(row.get("answer"), list) else json.dumps(row["answer"]),
-               answer_type="free_text")
+    return _mk(
+        sid,
+        hash(str(q)[:128]),
+        messages=[{"role": "user", "content": str(q)}],
+        thinking=row.get("Long_CoT") or row.get("response") or None,
+        answer=row.get("answer")
+        if not isinstance(row.get("answer"), list)
+        else json.dumps(row["answer"]),
+        answer_type="free_text",
+    )
 
 
 def map_pref_pairs(sid: str, row: dict[str, Any]) -> CorpusItem | None:
@@ -258,11 +297,15 @@ def map_pref_pairs(sid: str, row: dict[str, Any]) -> CorpusItem | None:
     chosen, rejected = row.get("chosen"), row.get("rejected")
     if not prompt or not chosen or not rejected:
         return None
-    return _mk(sid, row.get("id") or hash(str(prompt)[:128]),
-               messages=[{"role": "user", "content": str(prompt)}],
-               thinking=_extract_think(str(chosen)),
-               answer=str(chosen), answer_type="free_text",
-               meta={"rejected": str(rejected), "pair": True})
+    return _mk(
+        sid,
+        row.get("id") or hash(str(prompt)[:128]),
+        messages=[{"role": "user", "content": str(prompt)}],
+        thinking=_extract_think(str(chosen)),
+        answer=str(chosen),
+        answer_type="free_text",
+        meta={"rejected": str(rejected), "pair": True},
+    )
 
 
 def map_rl_row(sid: str, row: dict[str, Any]) -> CorpusItem | None:
@@ -272,10 +315,13 @@ def map_rl_row(sid: str, row: dict[str, Any]) -> CorpusItem | None:
         return None
     gt = (row.get("reward_model") or {}).get("ground_truth")
     options = row.get("options")
-    item = _mk(sid, row.get("id") or hash(str(q)[:128]),
-               messages=[{"role": "user", "content": str(q)}],
-               thinking=row.get("reasoning") or None,
-               answer=str(gt) if gt is not None else None)
+    item = _mk(
+        sid,
+        row.get("id") or hash(str(q)[:128]),
+        messages=[{"role": "user", "content": str(q)}],
+        thinking=row.get("reasoning") or None,
+        answer=str(gt) if gt is not None else None,
+    )
     if options:
         item.meta["options"] = options
         item.answer_type = "mcqa"
@@ -305,10 +351,10 @@ MAPPERS: dict[str, Mapper] = {
 
 def _read_rows(path: Path) -> Iterator[dict[str, Any]]:
     if path.suffix == ".parquet":
-        import pyarrow.parquet as pq
+        import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
-        for f in ([path] if path.is_file() else sorted(path.parent.glob("*.parquet"))):
-            for row in pq.read_table(f).to_pylist():
+        for part_file in [path] if path.is_file() else sorted(path.parent.glob("*.parquet")):
+            for row in pq.read_table(part_file).to_pylist():
                 yield row
         return
     if path.suffix == ".json":
@@ -317,11 +363,11 @@ def _read_rows(path: Path) -> Iterator[dict[str, Any]]:
         for row in rows:
             yield row
         return
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                yield json.loads(line)
+    with path.open() as f:
+        for raw_line in f:
+            stripped = raw_line.strip()
+            if stripped:
+                yield json.loads(stripped)
 
 
 def materialize_source(
@@ -357,10 +403,21 @@ def materialize_source(
                 # that is S3's job; a content hash here would silently merge
                 # distinct rows and salted hash() broke run-to-run reproducibility.
                 item = item.model_copy(update={"id": f"{source_id}:{file_idx}:{row_idx}"})
-                concat = question_concat(row) if not item.messages else question_concat(
-                    {"messages": item.messages, **{k: v for k, v in row.items() if isinstance(v, str)}})
+                concat = (
+                    question_concat(row)
+                    if not item.messages
+                    else question_concat(
+                        {
+                            "messages": item.messages,
+                            **{k: v for k, v in row.items() if isinstance(v, str)},
+                        }
+                    )
+                )
                 lang, score = detect_lang(concat)
-                item.lang, item.lang_score = ("en" if lang.startswith("en") else "fr" if lang.startswith("fr") else lang), score
+                item.lang, item.lang_score = (
+                    ("en" if lang.startswith("en") else "fr" if lang.startswith("fr") else lang),
+                    score,
+                )
             except Exception:
                 # malformed row, or LID failing on it: counted, not fatal --
                 # the manifest reports the rate (the yield stays outside this
@@ -396,15 +453,18 @@ def run_normalize(run_id: str, sources: list[str] | None = None) -> dict[str, An
         if batch:
             write_items(batch, out)
             batch.clear()
-    return {"stage_dir": str(out), "per_source": stats,
-            "thresholds": {"lid_floor": THRESHOLDS.lid_confidence_floor},
-            "glotlid_second_opinion": glotlid_available()}
+    return {
+        "stage_dir": str(out),
+        "per_source": stats,
+        "thresholds": {"lid_floor": THRESHOLDS.lid_confidence_floor},
+        "glotlid_second_opinion": glotlid_available(),
+    }
 
 
-def stage_entry(run_id: str, sources: list[str] | None = None):
+def stage_entry(run_id: str, sources: list[str] | None = None) -> StageManifest:
     """Runner adapter: dict result -> StageManifest."""
     from medrl.curation.schema import StageManifest, utcnow
-    from medrl.curation.store import count_items, content_sha256
+    from medrl.curation.store import content_sha256, count_items
 
     started = utcnow()
     result = run_normalize(run_id, sources)
@@ -414,7 +474,9 @@ def stage_entry(run_id: str, sources: list[str] | None = None):
         if s["rows_raw"] != s["kept"] + s["mapper_none"] + s["errored"]:
             raise StageError(f"S1: drop accounting does not balance for {sid}: {s}")
     manifest = StageManifest(
-        run_id=run_id, stage="01_normalize", started_at=started,
+        run_id=run_id,
+        stage="01_normalize",
+        started_at=started,
         config={"sources": sorted(per_source)},
         rows_in=sum(s["rows_raw"] for s in per_source.values()),
         rows_out=count_items(out_dir),

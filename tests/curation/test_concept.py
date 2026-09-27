@@ -105,9 +105,7 @@ def test_dup_key_normalizes_order_and_multiplicity() -> None:
 
 
 def test_cross_lingual_translation_pair_is_dup_flagged(tmp_path: Path) -> None:
-    en = _item(
-        "src_a:0002", cuis=["C001", "C002", "C003"], answer_cui="C009", question=EN_Q
-    )
+    en = _item("src_a:0002", cuis=["C001", "C002", "C003"], answer_cui="C009", question=EN_Q)
     fr = _item(
         "src_a:0001",
         cuis=["C001", "C002", "C003"],
@@ -137,7 +135,9 @@ def test_same_cui_set_different_answer_is_not_dup(tmp_path: Path) -> None:
     b = _item("src_a:2", cuis=["C001", "C002"], answer_cui="C010")
     manifest, rows = _run(tmp_path, [a, b])
 
-    assert all(not rows[i].flags.f_dup_concept and rows[i].dup_of is None for i in ("src_a:1", "src_a:2"))
+    assert all(
+        not rows[i].flags.f_dup_concept and rows[i].dup_of is None for i in ("src_a:1", "src_a:2")
+    )
     assert manifest.notes["concept_dup_groups"] == 0
     assert manifest.flag_rates["f_dup_concept"]["_all"] == 0.0
 
@@ -196,7 +196,9 @@ def test_contam_boundary_is_inclusive(tmp_path: Path) -> None:
     at_threshold = [*_SHARED_17, "C900", "C901", "C902"]  # 17/20 == 0.85
     below_threshold = [*_SHARED_17, "C900", "C901", "C902", "C903"]  # 17/21 < 0.85
     assert concept.concept_jaccard(set(at_threshold), set(_SHARED_17)) == THRESHOLDS.concept_jaccard
-    assert concept.concept_jaccard(set(below_threshold), set(_SHARED_17)) < THRESHOLDS.concept_jaccard
+    assert (
+        concept.concept_jaccard(set(below_threshold), set(_SHARED_17)) < THRESHOLDS.concept_jaccard
+    )
 
     items = [
         _item("src:1", cuis=at_threshold, answer_cui="C100"),
@@ -254,6 +256,7 @@ def test_contam_attribution_strongest_jaccard_then_lexicographic(tmp_path: Path)
 def test_eval_records_accept_plain_tuple_form(tmp_path: Path) -> None:
     """The documented record shape (benchmark, cuis, answer_cui) coerces to the
     same decisions as the dataclass -- the future S4-style index speaks tuples."""
+
     def fresh_item() -> CorpusItem:
         return _item("src:1", cuis=list(_SHARED_17), answer_cui="C100")
 

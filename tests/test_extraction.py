@@ -42,9 +42,11 @@ def test_contract_tolerates_markdown_quotes_and_parens() -> None:
     assert extract_mcqa("Answer: (d) some option text").value == "D"
 
 
-def test_contract_marker_is_case_sensitive() -> None:
-    # "ANSWER:" mid-prose must not fish a letter out of the reasoning block.
-    assert extract_mcqa("ANSWER: B").path is ExtractionPath.FAILED
+def test_contract_marker_is_case_insensitive() -> None:
+    # Post-campaign contract (2026-09): the marker match is case-INSENSITIVE --
+    # the baseline runs showed strict case-sensitivity was a top extraction
+    # failure mode (up to 36.8% on medxpertqa), so "ANSWER: B" now extracts.
+    assert extract_mcqa("ANSWER: B").path is ExtractionPath.CONTRACT
 
 
 def test_contract_ignores_words_starting_with_a_letter() -> None:
@@ -124,8 +126,9 @@ def test_french_guillemets_are_decoration() -> None:
 def test_answer_before_thinking_block_is_still_found() -> None:
     text = "Answer: B\n</think>\nActually, let me reconsider the labs.\nNo final marker."
     assert extract_mcqa(text).value == "B"
-    # ...but prose-only answers inside/after thinking fail measurably.
-    assert extract_mcqa("hidden reasoning; the answer is C.").path is ExtractionPath.FAILED
+    # ...but prose-only answers now extract via the PROSE path (added in the
+    # same campaign -- prose phrases like "the answer is C." are recoverable).
+    assert extract_mcqa("hidden reasoning; the answer is C.").path is ExtractionPath.PROSE
 
 
 def test_failure_modes_never_raise() -> None:
@@ -207,6 +210,7 @@ def test_extraction_stats_math() -> None:
         "guided_json": 1,
         "boxed": 1,
         "last_line": 0,
+        "prose": 0,
         "failed": 2,
     }
     assert sum(stats.by_path.values()) == stats.n
