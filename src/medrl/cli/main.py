@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -178,8 +178,8 @@ def model_convert(
 
 @data_app.command("curate")
 def data_curate(
-    run_id: Annotated[Optional[str], typer.Option(help="Run id; defaults to cur-<timestamp>.")] = None,
-    stage: Annotated[Optional[list[str]], typer.Option(help="Stage(s) to run; repeatable; default all registered.")] = None,
+    run_id: Annotated[str | None, typer.Option(help="Run id; defaults to cur-<timestamp>.")] = None,
+    stage: Annotated[list[str] | None, typer.Option(help="Stage(s) to run; repeatable; default all registered.")] = None,
     list_stages: Annotated[bool, typer.Option("--list", help="List registered stages and exit.")] = False,
 ) -> None:
     """Run curation pipeline stages. Heavy outputs -> /scratch, manifests -> experiments/ (committed)."""

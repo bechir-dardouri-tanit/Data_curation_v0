@@ -200,9 +200,8 @@ class BenchmarkIndex:
             if item_hashes is None:
                 item_hashes = ngram_hashes(self.items[key].text, self.ngram_n)
                 self.item_hashes[key] = item_hashes
-            if min(len(query_hashes), len(item_hashes)) / max(
-                len(query_hashes), len(item_hashes), 1
-            ) < threshold:
+            i_size = len(item_hashes)
+            if min(q_size, i_size) / max(q_size, i_size, 1) < threshold:
                 continue
             overlap = ngram_overlap(query_hashes, item_hashes)
             if overlap >= threshold:
