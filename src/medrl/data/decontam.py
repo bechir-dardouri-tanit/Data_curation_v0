@@ -62,9 +62,11 @@ def _cached_encoder(model: str) -> Any:
 # Benchmark index for decontamination
 # --------------------------------------------------------------------------------------
 
+
 @dataclass
 class BenchmarkItem:
     """One benchmark item for contamination checking."""
+
     benchmark: str
     item_id: str
     text: str
@@ -77,6 +79,7 @@ class BenchmarkItem:
 @dataclass
 class ContaminationHit:
     """One contamination finding."""
+
     train_id: str
     benchmark: str
     benchmark_item_id: str
@@ -89,6 +92,7 @@ class ContaminationHit:
 @dataclass
 class ContaminationReport:
     """Aggregated contamination report for one benchmark."""
+
     benchmark: str
     total_items: int = 0
     contaminated_items: int = 0
@@ -263,9 +267,11 @@ class BenchmarkIndex:
 # Contamination checking
 # --------------------------------------------------------------------------------------
 
+
 @dataclass
 class TrainDocument:
     """One training document for contamination checking."""
+
     id: str
     text: str
     source: str = ""  # Dataset or file source
@@ -283,6 +289,7 @@ class DecontaminationResult:
         hits: All contamination hits found
         reports: Per-benchmark contamination reports
     """
+
     total_train_docs: int = 0
     contaminated_docs: int = 0
     clean_docs: set[str] = field(default_factory=set)
@@ -450,9 +457,11 @@ def check_contamination(
 # Negative-control test generation
 # --------------------------------------------------------------------------------------
 
+
 @dataclass
 class NegativeControl:
     """A negative-control test case."""
+
     id: str
     text: str
     source_benchmark: str
@@ -486,8 +495,7 @@ def generate_negative_controls(
         import numpy as np
     except ImportError as exc:
         raise ImportError(
-            "numpy is required for negative control generation: "
-            "pip install numpy"
+            "numpy is required for negative control generation: pip install numpy"
         ) from exc
 
     random.seed(seed)
@@ -591,6 +599,7 @@ def _perturb_text(text: str) -> str:
 # Report generation
 # --------------------------------------------------------------------------------------
 
+
 def save_contamination_report(result: DecontaminationResult, path: Path) -> None:
     """Save contamination report to JSON file."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -635,19 +644,23 @@ def generate_per_benchmark_reports(
     for bench_name, report in result.reports.items():
         report_path = output_dir / f"{bench_name}_contamination.json"
         with report_path.open("w") as f:
-            json.dump({
-                "benchmark": bench_name,
-                "summary": report.summary(),
-                "hits": [
-                    {
-                        "train_id": h.train_id,
-                        "benchmark_item_id": h.benchmark_item_id,
-                        "ngram_overlap": h.ngram_overlap,
-                        "embedding_similarity": h.embedding_similarity,
-                    }
-                    for h in report.hits
-                ],
-            }, f, indent=2)
+            json.dump(
+                {
+                    "benchmark": bench_name,
+                    "summary": report.summary(),
+                    "hits": [
+                        {
+                            "train_id": h.train_id,
+                            "benchmark_item_id": h.benchmark_item_id,
+                            "ngram_overlap": h.ngram_overlap,
+                            "embedding_similarity": h.embedding_similarity,
+                        }
+                        for h in report.hits
+                    ],
+                },
+                f,
+                indent=2,
+            )
         paths[bench_name] = report_path
 
     log.info(f"generated {len(paths)} per-benchmark reports in {output_dir}")
@@ -657,6 +670,7 @@ def generate_per_benchmark_reports(
 # --------------------------------------------------------------------------------------
 # Loading benchmarks for index
 # --------------------------------------------------------------------------------------
+
 
 def load_benchmark_items_from_loaders(
     benchmark_names: Iterable[str],
@@ -722,7 +736,9 @@ def build_benchmark_index(
     for item in load_benchmark_items_from_loaders(benchmark_names):
         index.add(item)
 
-    log.info(f"built benchmark index: {len(index.items)} items from {len(benchmark_names)} benchmarks")
+    log.info(
+        f"built benchmark index: {len(index.items)} items from {len(benchmark_names)} benchmarks"
+    )
 
     if include_embeddings:
         index.build_embedding_index(model=embed_model)
@@ -783,8 +799,7 @@ def exact_decontam(
     """
 
     benchmark_hashes = {
-        hashlib.sha256(text.lower().strip().encode()).hexdigest()
-        for text in benchmark_texts
+        hashlib.sha256(text.lower().strip().encode()).hexdigest() for text in benchmark_texts
     }
 
     clean = []
@@ -798,8 +813,7 @@ def exact_decontam(
             clean.append(doc)
 
     log.info(
-        f"exact_decontam: {len(contaminated)}/{len(train_docs)} contaminated "
-        f"({len(clean)} clean)"
+        f"exact_decontam: {len(contaminated)}/{len(train_docs)} contaminated ({len(clean)} clean)"
     )
 
     return clean, contaminated
@@ -878,9 +892,7 @@ def semantic_decontam(
     # model and re-encoded per document (a full weight load per doc).
     docs = list(train_docs)
     doc_embeddings = (
-        compute_embeddings([d.text for d in docs], model=model).embeddings
-        if docs
-        else []
+        compute_embeddings([d.text for d in docs], model=model).embeddings if docs else []
     )
 
     # Check each training doc

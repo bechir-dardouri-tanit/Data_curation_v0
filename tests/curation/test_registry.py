@@ -27,11 +27,18 @@ def _hub_meta(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         registry,
         "fetch_hub_metadata",
-        lambda hf_id: {"resolved_id": hf_id, "sha": PINNED_SHA, "licence_tag": "mit", "gated": False},
+        lambda hf_id: {
+            "resolved_id": hf_id,
+            "sha": PINNED_SHA,
+            "licence_tag": "mit",
+            "gated": False,
+        },
     )
 
 
-def _install_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, files: dict[str, Any]) -> list[dict]:
+def _install_snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, files: dict[str, Any]
+) -> list[dict]:
     """Replace huggingface_hub.snapshot_download: record call kwargs, materialize
     the named files (an int value makes a sparse file of that many bytes) plus a
     non-data README the ledger must ignore."""
@@ -44,7 +51,7 @@ def _install_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, files: di
         for name, blob in files.items():
             p = d / name
             p.parent.mkdir(parents=True, exist_ok=True)
-            with open(p, "wb") as f:
+            with p.open("wb") as f:
                 if isinstance(blob, int):
                     f.truncate(blob)  # sparse: st_size without writing the bytes
                 else:
@@ -56,7 +63,9 @@ def _install_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, files: di
     return calls
 
 
-def test_acquire_pins_revision_and_hashes_exact_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_acquire_pins_revision_and_hashes_exact_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     blob = b'{"q": "what"}\n' * 7
     calls = _install_snapshot(monkeypatch, tmp_path, {"data/train.jsonl": blob})
     _hub_meta(monkeypatch)
@@ -76,7 +85,9 @@ def test_acquire_pins_revision_and_hashes_exact_bytes(tmp_path: Path, monkeypatc
     assert rec.content_sha256 == expected.hexdigest()
 
 
-def test_acquire_hashes_content_at_the_old_gib_cutoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_acquire_hashes_content_at_the_old_gib_cutoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The hash once short-circuited files >= 1 GiB to b"<large>": the largest
     shards contributed only their filename, so truncated/re-encoded re-downloads
     verified clean. A file AT the old cutoff must contribute its actual bytes."""
@@ -95,7 +106,9 @@ def test_acquire_hashes_content_at_the_old_gib_cutoff(tmp_path: Path, monkeypatc
     assert rec.content_sha256 == expected.hexdigest()
 
 
-def test_iter_source_files_pins_revision_and_file_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_iter_source_files_pins_revision_and_file_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """S1 must read the same bytes (revision) and the same file set
     (allow_patterns) S0 hashed: a repo shipping both .json and .jsonl exports
     would otherwise be read twice, duplicating every row."""

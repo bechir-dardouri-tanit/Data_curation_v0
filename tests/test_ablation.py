@@ -7,6 +7,11 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from medrl.ablation.analysis import (
+    analyze_promotion,
+    compare_arm_to_baseline,
+    compute_pareto_frontier,
+)
 from medrl.ablation.config import (
     ABLATION_A1,
     ABLATION_A2,
@@ -25,21 +30,15 @@ from medrl.ablation.config import (
     ParameterType,
     SweepConfig,
 )
+from medrl.ablation.report import generate_csv_export, generate_markdown_report
 from medrl.ablation.sweep import (
     ArmResult,
     SweepArm,
     SweepResult,
     SweepStatus,
-    SweepExecutor,
     _arm_id,
     _sweep_id,
 )
-from medrl.ablation.analysis import (
-    analyze_promotion,
-    compare_arm_to_baseline,
-    compute_pareto_frontier,
-)
-from medrl.ablation.report import generate_markdown_report, generate_csv_export
 
 
 def test_parameter_categorical() -> None:
