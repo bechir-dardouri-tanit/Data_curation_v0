@@ -250,22 +250,72 @@ def map_medical_r1_distill(sid: str, row: dict[str, Any]) -> CorpusItem | None:
     )
 
 
+def parse_options_blob(blob: str) -> list[tuple[str, str]]:
+    """'Answer Choices:\nA. X\nB. Y...' -> [('A','X'), ...]; validated 200/200
+    on real MedReason rows (2026-10-02)."""
+    import re as _re
+
+    lines = blob.replace("Answer Choices:", "").strip().splitlines()
+    pairs: list[tuple[str, str]] = []
+    cur_letter: str | None = None
+    cur_text: list[str] = []
+    for line in lines:
+        m = _re.match(r"^([A-J])[.]\s*(.*)$", line.strip())
+        if m:
+            if cur_letter:
+                pairs.append((cur_letter, " ".join(cur_text).strip()))
+            cur_letter, cur_text = m.group(1), [m.group(2)]
+        elif cur_letter:
+            cur_text.append(line.strip())
+    if cur_letter:
+        pairs.append((cur_letter, " ".join(cur_text).strip()))
+    return pairs
+
+
+def gold_letter_from_text(answer: str, pairs: list[tuple[str, str]]) -> str | None:
+    """Gold given as option TEXT (with optional 'Explanation:' suffix) -> letter."""
+    import re as _re
+
+    short = _re.split(r"\.?\s*Explanation:", answer)[0].strip().rstrip(".")
+    for letter, text in pairs:
+        if text.strip().rstrip(".") == short:
+            return letter
+    return None
+
+
 def _mcqa_from_row(sid: str, row: dict[str, Any]) -> CorpusItem | None:
-    """Shared mapper for m23k / MedReason / Huatuo-style rows with options+gold."""
-    q = row.get("question") or row.get("Question")
-    options = row.get("options") or row.get("Options")
+    """Shared mapper for MedReason / m23k-style rows with options+gold.
+
+    Real schemas (verified on raw rows 2026-10-02): MedReason carries options as
+    an 'Answer Choices:' text blob and the gold as option TEXT + explanation;
+    m23k keeps the question under `prompt` and the gold under answer_letter.
+    Both must resolve to a LETTER for pass@k grading.
+    """
+    q = row.get("question") or row.get("Question") or row.get("prompt")
+    options_raw = row.get("options") or row.get("Options")
     gold = row.get("answer") or row.get("Answer") or row.get("correct_answer")
+    if row.get("answer_letter"):
+        gold = str(row["answer_letter"]).strip()
     if not q:
         return None
+    pairs = parse_options_blob(str(options_raw)) if options_raw else []
+    if not pairs and row.get("prompt"):
+        # m23k: options rendered at the tail of the prompt ("...\nA. x\nB. y...")
+        pairs = parse_options_blob("\n".join(str(row["prompt"]).splitlines()[-12:]))
+    letter = None
+    if gold and len(str(gold).strip()) == 1 and str(gold).strip().isalpha():
+        letter = str(gold).strip().upper()
+    elif gold:
+        letter = gold_letter_from_text(str(gold), pairs)
     item = _mk(
         sid,
-        row.get("id") or hash(str(q)[:128]),
+        0,  # id assigned by materialize_source (row position)
         messages=[{"role": "user", "content": str(q)}],
         thinking=row.get("reasoning") or row.get("RATIONALE") or None,
-        answer=str(gold) if gold is not None else None,
+        answer=letter or (str(gold) if gold is not None else None),
     )
-    if options:
-        item.meta["options"] = options
+    if pairs:
+        item.meta["options"] = [{"letter": lt, "text": tx} for lt, tx in pairs]
         item.answer_type = "mcqa"
     elif row.get("open") or not gold:
         item.answer_type = "free_text"
@@ -309,21 +359,25 @@ def map_pref_pairs(sid: str, row: dict[str, Any]) -> CorpusItem | None:
 
 
 def map_rl_row(sid: str, row: dict[str, Any]) -> CorpusItem | None:
-    """II-Medical-RL / ChatDoctor-RL: question + reward_model.ground_truth (+ options)."""
+    """II-Medical-RL / ChatDoctor-RL. Verified on raw rows (2026-10-02):
+    II-Medical-RL's gold is the `label` field ('A'); options are an
+    'Answer Choices:' text blob needing the blob parser. ChatDoctor-RL rows
+    carry no gold -- answer stays None there by design."""
     q = row.get("question") or row.get("problem")
     if not q:
         return None
-    gt = (row.get("reward_model") or {}).get("ground_truth")
-    options = row.get("options")
+    gt = (row.get("label") or "").strip() or (row.get("reward_model") or {}).get("ground_truth")
+    options_raw = row.get("options")
+    pairs = parse_options_blob(str(options_raw)) if options_raw else []
     item = _mk(
         sid,
-        row.get("id") or hash(str(q)[:128]),
+        0,  # id assigned by materialize_source (row position)
         messages=[{"role": "user", "content": str(q)}],
         thinking=row.get("reasoning") or None,
-        answer=str(gt) if gt is not None else None,
+        answer=str(gt) if gt else None,
     )
-    if options:
-        item.meta["options"] = options
+    if pairs:
+        item.meta["options"] = [{"letter": lt, "text": tx} for lt, tx in pairs]
         item.answer_type = "mcqa"
     return item
 

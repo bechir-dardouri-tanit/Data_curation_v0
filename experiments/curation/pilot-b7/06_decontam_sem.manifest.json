@@ -1,0 +1,37 @@
+{
+  "run_id": "pilot-b7",
+  "stage": "06_decontam_sem",
+  "started_at": "2026-10-02T10:17:19.516325Z",
+  "finished_at": "2026-10-02T10:26:31.009433Z",
+  "wall_s": 551.493,
+  "config": {
+    "bench_vectors": "/scratch/medrl/curation/pilot-b7/bench_vectors.json"
+  },
+  "thresholds": {
+    "semantic_dup": 0.95,
+    "semantic_contam": 0.9
+  },
+  "rows_in": 254800,
+  "rows_out": 254800,
+  "flag_rates": {
+    "f_dup_semantic": {
+      "_all": 0.0
+    },
+    "f_contam_semantic": {
+      "_all": 0.0002629513343799058
+    }
+  },
+  "input_sha256": "8861cbef8ec4be2e895a0299864e2e205b6f29af780000a0e7cb7f098f45eb66",
+  "output_sha256": "cbfb54541b64a474af4d64aa22f554e4e19227d8bf44166c6939c4e9d3fec21d",
+  "code_sha": null,
+  "notes": {
+    "semantic_dup_pairs": 0,
+    "semantic_contam_hits": 67,
+    "per_benchmark_hits": {
+      "medxpertqa_text": 21,
+      "mmlu_pro": 37,
+      "medmcqa": 7,
+      "medcalc": 2
+    }
+  }
+}

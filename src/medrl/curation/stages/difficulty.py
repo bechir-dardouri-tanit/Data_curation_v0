@@ -239,7 +239,13 @@ def _options_list(item: CorpusItem) -> list[str | tuple[str, str]]:
     options = item.meta.get("options")
     if isinstance(options, dict):
         return [(str(k), str(v)) for k, v in sorted(options.items())]
-    return [str(o) for o in (options or [])]
+    out = []
+    for o in options or []:
+        if isinstance(o, dict) and "letter" in o and "text" in o:
+            out.append((str(o["letter"]), str(o["text"])))
+        else:
+            out.append(str(o))
+    return out
 
 
 def _question_of(item: CorpusItem) -> str:

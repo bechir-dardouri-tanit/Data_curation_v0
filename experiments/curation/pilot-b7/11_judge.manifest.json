@@ -1,0 +1,139 @@
+{
+  "run_id": "pilot-b7",
+  "stage": "11_judge",
+  "started_at": "2026-10-02T10:29:24.838842Z",
+  "finished_at": "2026-10-02T16:14:00.079757Z",
+  "wall_s": 20675.241,
+  "config": {
+    "input_dir": "/scratch/medrl/curation/pilot-b7/09_answers",
+    "output_dir": "/scratch/medrl/curation/pilot-b7/11_judge",
+    "axes_path": "/root/medrl/configs/curation/judge_axes.yaml",
+    "axes_sha256": "584d59df56a3211250a454745b6bfaa7210aac5883955780dd198ba27a359f81",
+    "axes": {
+      "clinical": [
+        "clin-no-contraindication",
+        "clin-escalation-uncertainty",
+        "clin-dosing-sanity"
+      ],
+      "coherence": [
+        "coh-self-consistent",
+        "coh-answers-question",
+        "coh-no-circular-reasoning"
+      ],
+      "formatting": [
+        "fmt-mcqa-terminal-answer",
+        "fmt-numeric-units",
+        "fmt-no-roleplay-leakage"
+      ]
+    },
+    "model": "Qwen/Qwen3.5-4B",
+    "base_url": "http://127.0.0.1:8102",
+    "pass_threshold": 0.5,
+    "verdicts_path": "/scratch/medrl/curation/pilot-b7/11_judge/verdicts.jsonl",
+    "temperature": 0.0,
+    "max_tokens": 512
+  },
+  "thresholds": {
+    "min_tokens": 8,
+    "max_tokens": 32768,
+    "repetition_span_chars": 50,
+    "repetition_max_occurrences": 4,
+    "encoding_damage_max_ratio": 0.001,
+    "minhash_num_perm": 128,
+    "minhash_shingle_n": 5,
+    "minhash_jaccard": 0.8,
+    "ngram_dup_n": 13,
+    "ngram_dup_jaccard": 0.9,
+    "contam_ngram_n": 13,
+    "contam_ngram_threshold": 0.8,
+    "embed_dim_store": 2560,
+    "embed_dim_index": 1024,
+    "semantic_dup_threshold": 0.95,
+    "semantic_contam_threshold": 0.9,
+    "lid_confidence_floor": 0.9,
+    "lid_min_chars": 20,
+    "lid_concat_chars": 200,
+    "concept_jaccard": 0.85,
+    "numeric_rtol": 0.005,
+    "numeric_atol": 1e-8,
+    "grounding_drop_only_contradicted": true,
+    "passk_samples": 8,
+    "passk_temperature": 0.6,
+    "passk_max_tokens": 10240,
+    "passk_think_budget": 8192,
+    "passk_topup_k": [
+      3,
+      4,
+      7,
+      8
+    ],
+    "passk_topup_samples": 8,
+    "band_downsample": 1.0,
+    "band_sft1_low": 0.5,
+    "band_rl_low": 0.1,
+    "band_rl_high": 0.4,
+    "gen_temperature": 0.7,
+    "gen_top_p": 0.95,
+    "gen_samples_per_prompt": 6,
+    "gen_max_kept_per_prompt": 2
+  },
+  "rows_in": 254800,
+  "rows_out": 254800,
+  "flag_rates": {},
+  "input_sha256": "1c7ea348c337960e5a18ca3a4cb0f8ef56472561e53d405da698487ac1fc4efa",
+  "output_sha256": "3cb9dbbf97fbbad103a66f97a2845cd2d6b1eaaf57eed25998f0807bbf7b5d84",
+  "code_sha": null,
+  "notes": {
+    "judged": 231421,
+    "skipped": 0,
+    "flagged_passthrough": 23379,
+    "axis_pass_rates": {
+      "q_coherence": {
+        "chatdoctor_healthcaremagic": 0.9888034381361683,
+        "finemed_dpo": 0.31370284834488066,
+        "finemed_sft": 0.9903984434481008,
+        "huatuo_o1_reasoning": 0.3658129175946548,
+        "ii_medical_reasoning_sft": 0.9987824899924367,
+        "ii_medical_rl": 0.5548189699133096,
+        "medical_r1_distill": 0.9979338842975206,
+        "medreason": 0.30608291359938006,
+        "_all": 0.9676779548960552
+      },
+      "q_clinical": {
+        "chatdoctor_healthcaremagic": 0.26136620674055644,
+        "finemed_dpo": 0.8995381062355658,
+        "finemed_sft": 0.9136917350477963,
+        "huatuo_o1_reasoning": 0.7319042316258352,
+        "ii_medical_reasoning_sft": 0.910230158583753,
+        "ii_medical_rl": 0.985721570627231,
+        "medical_r1_distill": 0.9287190082644629,
+        "medreason": 0.6342502905850446,
+        "_all": 0.8809745010176259
+      },
+      "q_format": {
+        "chatdoctor_healthcaremagic": 0.3422302646460077,
+        "finemed_dpo": 0.8710546574287914,
+        "finemed_sft": 0.9289611707977329,
+        "huatuo_o1_reasoning": 0.8635857461024499,
+        "ii_medical_reasoning_sft": 0.8223788177854846,
+        "ii_medical_rl": 0.9954105048444671,
+        "medical_r1_distill": 0.5872933884297521,
+        "medreason": 0.7927160015497869,
+        "_all": 0.8261653004697067
+      }
+    },
+    "unparseable_after_retry": {
+      "coherence": 3,
+      "clinical": 34,
+      "formatting": 7
+    },
+    "retry_jobs": 64,
+    "gen": {
+      "ran": 694327,
+      "resumed": 0,
+      "failed": 0
+    },
+    "verdicts_cached": 694327,
+    "pass_threshold_source": "pass threshold defaults to THRESHOLDS.band_sft1_low: thresholds.py has no judge knob; the value (0.5) is the plan's axis pass threshold -- add judge_pass_threshold at calibration"
+  }
+}

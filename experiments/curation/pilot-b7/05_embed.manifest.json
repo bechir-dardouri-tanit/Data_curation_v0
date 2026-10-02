@@ -1,9 +1,9 @@
 {
   "run_id": "pilot-b7",
   "stage": "05_embed",
-  "started_at": "2026-10-02T09:59:34.033733Z",
-  "finished_at": "2026-10-02T10:03:11.644740Z",
-  "wall_s": 217.611,
+  "started_at": "2026-10-02T10:11:05.967862Z",
+  "finished_at": "2026-10-02T10:14:45.445328Z",
+  "wall_s": 219.477,
   "config": {
     "model": "Qwen/Qwen3-Embedding-4B",
     "base_url": "http://127.0.0.1:8101",
@@ -23,7 +23,7 @@
   "notes": {
     "embedded": 0,
     "already_embedded": 254800,
-    "wall_s": 201.4,
+    "wall_s": 203.4,
     "ann_index": "/scratch/medrl/curation/pilot-b7/05_embed/ann.usearch",
     "dim": 2560
   }
