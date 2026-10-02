@@ -49,20 +49,44 @@ def bytes_to_vec(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype="<f2").astype(np.float32)
 
 
-EMBED_MAX_CHARS = 1000  # ~250-330 tokens even for FR/DE subword splits: safely under max-model-len 512
+EMBED_MAX_CHARS = 1000
+"""Cheap first-pass cap; the TOKEN cap below is the real guarantee.
+
+Char caps cannot bound tokens: arithmetic/URL-like text tokenizes at ~2
+tokens/char (the pilot's math rows: 1000 chars -> 800+ tokens -> HTTP 400
+against max-model-len 512). Token-aware truncation is the contract.
+"""
+
+EMBED_MAX_TOKENS = 480  # margin under the 512 serve budget
+
+_tokenizer = None
+
+
+def _tok():
+    global _tokenizer
+    if _tokenizer is None:
+        from transformers import AutoTokenizer
+
+        _tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-Embedding-4B", local_files_only=True)
+    return _tokenizer
+
+
+def embed_truncate(text: str) -> str:
+    """Token-budget truncation; falls back to the char cap if the tokenizer
+    cannot load (offline edge) -- the 400 then surfaces with its body."""
+    text = text.strip()[:EMBED_MAX_CHARS] or " "
+    try:
+        ids = _tok().encode(text)
+        if len(ids) > EMBED_MAX_TOKENS:
+            text = _tok().decode(ids[:EMBED_MAX_TOKENS], skip_special_tokens=True)
+    except Exception:  # tokenizer unavailable: char cap stands
+        pass
+    return text
 
 
 def _question_of(it: CorpusItem) -> str:
-    """User content, truncated to the embedding budget.
-
-    A handful of pool rows (FineMed instructions) run to hundreds of k chars;
-    the server 400s anything over max-model-len. Dedup/decontam compare
-    openings -- truncation costs nothing where it matters and keeps the batch
-    contract intact. Empty text becomes a single space (empty input 400s).
-    """
-    text = next((m["content"] for m in it.messages if m["role"] == "user"), "")
-    text = text.strip()[:EMBED_MAX_CHARS]
-    return text if text else " "
+    """User content, token-budget truncated (see embed_truncate)."""
+    return embed_truncate(next((m["content"] for m in it.messages if m["role"] == "user"), ""))
 
 
 async def _embed_all(base_url: str, model: str, texts: list[str]) -> list[np.ndarray]:

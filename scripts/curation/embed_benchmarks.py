@@ -30,7 +30,7 @@ import numpy as np
 sys.path.insert(0, "/root/medrl/src")
 
 from medrl.curation.stages.decontam_ngram import build_question_index
-from medrl.curation.stages.embed import _embed_all
+from medrl.curation.stages.embed import _embed_all, embed_truncate
 
 DEFAULT_BENCHES = [
     "medqa", "medmcqa", "mmlu_pro_health", "medxpertqa_text", "mediqal",
@@ -56,7 +56,7 @@ def build_benchmark_vectors(
         texts.append(item.text)
         keys.append(key)
 
-    texts = [t.strip()[:1000] or " " for t in texts]  # same budget as embed.py
+    texts = [embed_truncate(t) for t in texts]  # token-budget, same contract as embed.py
     vectors = _embed_all(base_url, model, texts)
 
     out = Path(out_path)
