@@ -21,6 +21,7 @@ Run AFTER the embedding server is up:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -57,7 +58,7 @@ def build_benchmark_vectors(
         keys.append(key)
 
     texts = [embed_truncate(t) for t in texts]  # token-budget, same contract as embed.py
-    vectors = _embed_all(base_url, model, texts)
+    vectors = asyncio.run(_embed_all(base_url, model, texts))
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,30 @@
+{
+  "run_id": "pilot-b7",
+  "stage": "05_embed",
+  "started_at": "2026-10-02T09:46:32.797442Z",
+  "finished_at": "2026-10-02T09:56:19.420053Z",
+  "wall_s": 586.623,
+  "config": {
+    "model": "Qwen/Qwen3-Embedding-4B",
+    "base_url": "http://127.0.0.1:8101",
+    "dims_store": 2560,
+    "dims_index": 1024
+  },
+  "thresholds": {
+    "semantic_dup": 0.95,
+    "semantic_contam": 0.9
+  },
+  "rows_in": 254800,
+  "rows_out": 254800,
+  "flag_rates": {},
+  "input_sha256": "1c7ea348c337960e5a18ca3a4cb0f8ef56472561e53d405da698487ac1fc4efa",
+  "output_sha256": "8861cbef8ec4be2e895a0299864e2e205b6f29af780000a0e7cb7f098f45eb66",
+  "code_sha": null,
+  "notes": {
+    "embedded": 204800,
+    "already_embedded": 50000,
+    "wall_s": 584.7,
+    "ann_index": "/scratch/medrl/curation/pilot-b7/05_embed/ann.usearch",
+    "dim": 2560
+  }
+}
