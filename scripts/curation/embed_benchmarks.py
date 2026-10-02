@@ -56,6 +56,7 @@ def build_benchmark_vectors(
         texts.append(item.text)
         keys.append(key)
 
+    texts = [t.strip()[:1800] or " " for t in texts]  # same budget as embed.py
     vectors = _embed_all(base_url, model, texts)
 
     out = Path(out_path)

@@ -49,8 +49,20 @@ def bytes_to_vec(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype="<f2").astype(np.float32)
 
 
+EMBED_MAX_CHARS = 1800  # ~450-500 tokens: under the serve-time max-model-len 512
+
+
 def _question_of(it: CorpusItem) -> str:
-    return next((m["content"] for m in it.messages if m["role"] == "user"), "")
+    """User content, truncated to the embedding budget.
+
+    A handful of pool rows (FineMed instructions) run to hundreds of k chars;
+    the server 400s anything over max-model-len. Dedup/decontam compare
+    openings -- truncation costs nothing where it matters and keeps the batch
+    contract intact. Empty text becomes a single space (empty input 400s).
+    """
+    text = next((m["content"] for m in it.messages if m["role"] == "user"), "")
+    text = text.strip()[:EMBED_MAX_CHARS]
+    return text if text else " "
 
 
 async def _embed_all(base_url: str, model: str, texts: list[str]) -> list[np.ndarray]:
