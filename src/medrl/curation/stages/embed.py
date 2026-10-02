@@ -49,7 +49,7 @@ def bytes_to_vec(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype="<f2").astype(np.float32)
 
 
-EMBED_MAX_CHARS = 1800  # ~450-500 tokens: under the serve-time max-model-len 512
+EMBED_MAX_CHARS = 1000  # ~250-330 tokens even for FR/DE subword splits: safely under max-model-len 512
 
 
 def _question_of(it: CorpusItem) -> str:
@@ -83,6 +83,9 @@ async def _embed_all(base_url: str, model: str, texts: list[str]) -> list[np.nda
                         )
                         if r.status_code in (429, 500, 502, 503):
                             raise httpx.HTTPError(f"status {r.status_code}")
+                        if r.status_code != 200:
+                            body = r.text[:200]
+                            raise httpx.HTTPError(f"status {r.status_code}: {body}")
                         r.raise_for_status()
                         data = sorted(r.json()["data"], key=lambda d: d["index"])
                         for off, emb in enumerate(data):
