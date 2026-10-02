@@ -1,0 +1,32 @@
+{
+  "run_id": "pilot-b7",
+  "stage": "09_answers",
+  "started_at": "2026-10-02T09:22:54.519695Z",
+  "finished_at": "2026-10-02T09:23:43.712883Z",
+  "wall_s": 49.193,
+  "config": {},
+  "thresholds": {
+    "numeric_rtol": 0.005
+  },
+  "rows_in": 254800,
+  "rows_out": 254800,
+  "flag_rates": {
+    "f_answer_wrong": {
+      "_all": 0.0
+    }
+  },
+  "input_sha256": "1c7ea348c337960e5a18ca3a4cb0f8ef56472561e53d405da698487ac1fc4efa",
+  "output_sha256": "1c7ea348c337960e5a18ca3a4cb0f8ef56472561e53d405da698487ac1fc4efa",
+  "code_sha": null,
+  "notes": {
+    "by_answer_type": {
+      "mcqa": 3895,
+      "numeric": 0,
+      "free_text": 75200,
+      "none": 175705
+    },
+    "wrong": 0,
+    "right_but_contradicts": 0,
+    "no_answer_rows_skipped": 250905
+  }
+}

@@ -289,8 +289,8 @@ def stage_entry(
     production calls take only ``run_id``.
     """
     started = utcnow()
-    inp = input_dir if input_dir is not None else store.stage_dir(run_id, INPUT_STAGE)
-    out = output_dir if output_dir is not None else store.stage_dir(run_id, STAGE)
+    inp = Path(input_dir) if input_dir is not None else store.stage_dir(run_id, INPUT_STAGE)
+    out = Path(output_dir) if output_dir is not None else store.stage_dir(run_id, STAGE)
     if not inp.is_dir():
         raise StageError(f"S8: input snapshot {inp} does not exist -- run {INPUT_STAGE} first")
     out.mkdir(parents=True, exist_ok=True)  # explicit dirs skip stage_dir's mkdir

@@ -1,0 +1,99 @@
+{
+  "run_id": "pilot-b7",
+  "stage": "03_dedup",
+  "started_at": "2026-09-27T13:50:37.118374Z",
+  "finished_at": "2026-09-27T15:24:14.246223Z",
+  "wall_s": 5617.128,
+  "config": {
+    "input_dir": "/scratch/medrl/curation/pilot-b7/02_structural",
+    "output_dir": "/scratch/medrl/curation/pilot-b7/03_dedup",
+    "passes": [
+      "exact",
+      "ngram",
+      "minhash"
+    ]
+  },
+  "thresholds": {
+    "min_tokens": 8,
+    "max_tokens": 32768,
+    "repetition_span_chars": 50,
+    "repetition_max_occurrences": 4,
+    "encoding_damage_max_ratio": 0.001,
+    "minhash_num_perm": 128,
+    "minhash_shingle_n": 5,
+    "minhash_jaccard": 0.8,
+    "ngram_dup_n": 13,
+    "ngram_dup_jaccard": 0.9,
+    "contam_ngram_n": 13,
+    "contam_ngram_threshold": 0.8,
+    "embed_dim_store": 2560,
+    "embed_dim_index": 1024,
+    "semantic_dup_threshold": 0.95,
+    "semantic_contam_threshold": 0.9,
+    "lid_confidence_floor": 0.9,
+    "lid_min_chars": 20,
+    "lid_concat_chars": 200,
+    "concept_jaccard": 0.85,
+    "numeric_rtol": 0.005,
+    "numeric_atol": 1e-8,
+    "grounding_drop_only_contradicted": true,
+    "passk_samples": 8,
+    "passk_temperature": 0.6,
+    "passk_max_tokens": 10240,
+    "passk_think_budget": 8192,
+    "passk_topup_k": [
+      3,
+      4,
+      7,
+      8
+    ],
+    "passk_topup_samples": 8,
+    "band_downsample": 1.0,
+    "band_sft1_low": 0.5,
+    "band_rl_low": 0.1,
+    "band_rl_high": 0.4,
+    "gen_temperature": 0.7,
+    "gen_top_p": 0.95,
+    "gen_samples_per_prompt": 6,
+    "gen_max_kept_per_prompt": 2
+  },
+  "rows_in": 254800,
+  "rows_out": 254800,
+  "flag_rates": {
+    "f_dup_exact": {
+      "chatdoctor_healthcaremagic": 0.013555555555555555,
+      "finemed_dpo": 0.0,
+      "finemed_sft": 0.18387931034482757,
+      "huatuo_o1_reasoning": 0.0002777777777777778,
+      "ii_medical_reasoning_sft": 0.0,
+      "ii_medical_rl": 0.0,
+      "medical_r1_distill": 0.0,
+      "medreason": 0.0,
+      "_all": 0.042339089481946625
+    },
+    "f_dup_minhash": {
+      "chatdoctor_healthcaremagic": 0.0033333333333333335,
+      "finemed_dpo": 0.0,
+      "finemed_sft": 0.0,
+      "huatuo_o1_reasoning": 0.0011111111111111111,
+      "ii_medical_reasoning_sft": 0.0,
+      "ii_medical_rl": 0.0,
+      "medical_r1_distill": 0.0,
+      "medreason": 0.0,
+      "_all": 0.0001334379905808477
+    }
+  },
+  "input_sha256": "0b874d74d4aa19e26e7b5d79b68dabb9e60f2215277095dee39de5b9f1c5e18e",
+  "output_sha256": "3b1b077b646da36c9631014b5ba60d38d7c56d73249dd255a28846e1f53635a8",
+  "code_sha": null,
+  "notes": {
+    "exact_groups": 10714,
+    "ngram_groups": 5,
+    "minhash_groups": 25,
+    "kept_by_rule": {
+      "licence": 0,
+      "thinking": 30,
+      "source_id": 10714
+    }
+  }
+}

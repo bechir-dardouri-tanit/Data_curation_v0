@@ -1,0 +1,127 @@
+{
+  "run_id": "pilot-b7",
+  "stage": "01_normalize",
+  "started_at": "2026-09-27T13:36:22.237852Z",
+  "finished_at": "2026-09-27T13:37:43.523582Z",
+  "wall_s": 81.286,
+  "config": {
+    "sources": [
+      "chatdoctor_healthcaremagic",
+      "chatdoctor_rl",
+      "finemed_dpo",
+      "finemed_sft",
+      "generalthought_biology",
+      "huatuo_o1_reasoning",
+      "ii_medical_reasoning_sft",
+      "ii_medical_rl",
+      "m23k_tokenized",
+      "medical_r1_distill",
+      "medreason"
+    ]
+  },
+  "thresholds": {},
+  "rows_in": 725830,
+  "rows_out": 254800,
+  "flag_rates": {},
+  "input_sha256": null,
+  "output_sha256": "bb84ee90ca2a4eddf4a4681713930c7bf8ed99c75b1e5961d4906cc7c0ad4042",
+  "code_sha": null,
+  "notes": {
+    "per_source": {
+      "ii_medical_reasoning_sft": {
+        "rows_raw": 175000,
+        "mapper_none": 0,
+        "errored": 0,
+        "kept": 175000
+      },
+      "finemed_sft": {
+        "rows_raw": 58000,
+        "mapper_none": 0,
+        "errored": 0,
+        "kept": 58000
+      },
+      "chatdoctor_healthcaremagic": {
+        "rows_raw": 9000,
+        "mapper_none": 0,
+        "errored": 0,
+        "kept": 9000
+      },
+      "generalthought_biology": {
+        "rows_raw": 430788,
+        "mapper_none": 430788,
+        "errored": 0,
+        "kept": 0
+      },
+      "medical_r1_distill": {
+        "rows_raw": 2000,
+        "mapper_none": 0,
+        "errored": 0,
+        "kept": 2000
+      },
+      "m23k_tokenized": {
+        "rows_raw": 23493,
+        "mapper_none": 23493,
+        "errored": 0,
+        "kept": 0
+      },
+      "medreason": {
+        "rows_raw": 2600,
+        "mapper_none": 0,
+        "errored": 0,
+        "kept": 2600
+      },
+      "huatuo_o1_reasoning": {
+        "rows_raw": 3600,
+        "mapper_none": 0,
+        "errored": 0,
+        "kept": 3600
+      },
+      "finemed_dpo": {
+        "rows_raw": 2600,
+        "mapper_none": 0,
+        "errored": 0,
+        "kept": 2600
+      },
+      "ii_medical_rl": {
+        "rows_raw": 2000,
+        "mapper_none": 0,
+        "errored": 0,
+        "kept": 2000
+      },
+      "chatdoctor_rl": {
+        "rows_raw": 16749,
+        "mapper_none": 16749,
+        "errored": 0,
+        "kept": 0
+      }
+    },
+    "dropped_by_mapper": {
+      "ii_medical_reasoning_sft": 0,
+      "finemed_sft": 0,
+      "chatdoctor_healthcaremagic": 0,
+      "generalthought_biology": 430788,
+      "medical_r1_distill": 0,
+      "m23k_tokenized": 23493,
+      "medreason": 0,
+      "huatuo_o1_reasoning": 0,
+      "finemed_dpo": 0,
+      "ii_medical_rl": 0,
+      "chatdoctor_rl": 16749
+    },
+    "errored_rows": {
+      "ii_medical_reasoning_sft": 0,
+      "finemed_sft": 0,
+      "chatdoctor_healthcaremagic": 0,
+      "generalthought_biology": 0,
+      "medical_r1_distill": 0,
+      "m23k_tokenized": 0,
+      "medreason": 0,
+      "huatuo_o1_reasoning": 0,
+      "finemed_dpo": 0,
+      "ii_medical_rl": 0,
+      "chatdoctor_rl": 0
+    },
+    "rows_out_matches_kept": true,
+    "glotlid_second_opinion": false
+  }
+}

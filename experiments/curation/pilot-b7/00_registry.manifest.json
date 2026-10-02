@@ -1,0 +1,35 @@
+{
+  "run_id": "pilot-b7",
+  "stage": "00_registry",
+  "started_at": "2026-09-27T13:36:06.819626Z",
+  "finished_at": "2026-09-27T13:36:22.237617Z",
+  "wall_s": 15.418,
+  "config": {
+    "n_sources": 11
+  },
+  "thresholds": {},
+  "rows_in": 0,
+  "rows_out": 11,
+  "flag_rates": {},
+  "input_sha256": null,
+  "output_sha256": null,
+  "code_sha": null,
+  "notes": {
+    "acquired": [
+      "ii_medical_reasoning_sft",
+      "finemed_sft",
+      "chatdoctor_healthcaremagic",
+      "generalthought_biology",
+      "medical_r1_distill",
+      "m23k_tokenized",
+      "medreason",
+      "huatuo_o1_reasoning",
+      "finemed_dpo",
+      "ii_medical_rl",
+      "chatdoctor_rl"
+    ],
+    "failed": {},
+    "registry_path": "/scratch/medrl/curation/pilot-b7/00_registry/registry.jsonl",
+    "rows_sha256": "e810ef3b626368c607dc61fdc02848b3efe373d38a309939c536ab7fb9ad2802"
+  }
+}
