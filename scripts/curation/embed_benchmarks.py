@@ -66,7 +66,8 @@ def build_benchmark_vectors(
     row = 0
     payload: dict[str, list[dict]] = {}
     for bench in sorted(per_bench):
-        payload[bench] = [{"id": k, "key": row + i} for i, k in enumerate(per_bench[bench])]
+        # npz keys are strings on both write and read -- keep them strings end to end
+        payload[bench] = [{"id": k, "key": str(row + i)} for i, k in enumerate(per_bench[bench])]
         row += len(per_bench[bench])
     out.with_suffix(".json").write_text(json.dumps(payload))
     np.savez_compressed(out.with_suffix(".npz"), **{str(i): v for i, v in enumerate(vectors)})
